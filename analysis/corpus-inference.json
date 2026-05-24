@@ -1,0 +1,27 @@
+{
+ "description": "Production inference servers - separate tier",
+ "images": [
+  {
+   "id": "vllm-openai",
+   "category": "inference-server",
+   "role": "knative-workload",
+   "overlap_group": "inference",
+   "source_ref": "vllm/vllm-openai:v0.21.0-cu129-ubuntu2404"
+  },
+  {
+   "id": "triton-server",
+   "category": "inference-server",
+   "role": "knative-workload",
+   "overlap_group": "inference",
+   "source_ref": "nvcr.io/nvidia/tritonserver:26.04-py3"
+  },
+  {
+   "id": "tgi",
+   "category": "inference-server",
+   "role": "knative-workload",
+   "overlap_group": "inference",
+   "source_ref": "ghcr.io/huggingface/text-generation-inference:3.3.4"
+  }
+ ],
+ "coverage_scenarios": []
+}

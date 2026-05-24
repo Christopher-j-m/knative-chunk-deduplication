@@ -1,0 +1,34 @@
+{
+  "captured_at": "2026-05-15T14:59:46Z",
+  "tool_versions": {
+    "nydusify": "Nydusify version ",
+    "nydus_image": "Version: v2.4.1",
+    "go": "go1.26.3-X:nodwarf5",
+    "docker": "29.4.3"
+  },
+  "script_git_revision": "91fb567afde27f664fb7dc83a95a89fd036122f9",
+  "platform": "x86_64",
+  "images": [
+    {"id": "python-3.14-slim", "oci_digest": "python@sha256:7a500125bc50693f2214e842a621440a1b1b9cbb2188f74ab045d29ed2ea5856", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "python-3.13-slim", "oci_digest": "python@sha256:dc1546eefcbe8caaa1f004f16ab76b204b5e1dbd58ff81b899f21cd40541232f", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "node-26-slim", "oci_digest": "node@sha256:424cafd2a035ed2b2d74acc3142b68b426fb62a47742c80a75e7117db02d6b30", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "node-24-slim", "oci_digest": "node@sha256:24dc26ef1e3c3690f27ebc4136c9c186c3133b25563ae4d7f0692e4d1fe5db0e", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "golang-1.26-alpine", "oci_digest": "golang@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "rust-1.95-slim", "oci_digest": "rust@sha256:5021128d455987e7e7d6586bd7288fa876614821292614acbb761c21fc1ebb15", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "node-express", "oci_digest": "localhost:5000/node-express@sha256:fd0ddb9c8a4bae7c6b5a3f2810b125b8e5da33dc74376f8071e76f4c853c7f9e", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "node-fastify", "oci_digest": "localhost:5000/node-fastify@sha256:b187a7e1ef71feadf6ed437fef77c0c666d91b15c1a1471a6b70ec3e0c9baf90", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-python-hello", "oci_digest": "localhost:5000/fn-python-hello@sha256:3a0aef56d9859eba4808a96198951a84385ff7bd73a21b6b627ef02a7fb615d2", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-python-ml", "oci_digest": "localhost:5000/fn-python-ml@sha256:48fcb8ae0381b6c81e9230ad2c1fda5e0202a5ebea50e08590fafe9331d0daa0", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-python-api", "oci_digest": "localhost:5000/fn-python-api@sha256:a1f58f06820b41dfdc6452e5399ce1d48b84e046b1f224bfc14ff3bdadba4854", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-node-hello", "oci_digest": "localhost:5000/fn-node-hello@sha256:f0d68c31c8dbcf0a1b6455e2f0ff247aac442a3602087fb47d873db4a208deb9", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-node-api", "oci_digest": "localhost:5000/fn-node-api@sha256:eb81921f471522bdeacc3b4f80f8d90cad509bba4079a6056ae8a7b37d2677c8", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-go-hello", "oci_digest": "localhost:5000/fn-go-hello@sha256:986bf1526aab5ad60a8a0428cd32802c9746e1fc5d87ce6f30707893bd7c29f5", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-rust-hello", "oci_digest": "localhost:5000/fn-rust-hello@sha256:044f6d121ae34b7f5acd510e01b027704959f532a2b28e2b869db461dc4e8a0b", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-java-hello", "oci_digest": "localhost:5000/fn-java-hello@sha256:060c00a1b9c5127c540667fe6895b1b4cb1228242bd096535acec9214f720058", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-java-springboot", "oci_digest": "localhost:5000/fn-java-springboot@sha256:adfaf71aff90f35b797fe09cac3e938692af5c89e4cc0ad3e63ac5b63458ca56", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-tf-serving", "oci_digest": "localhost:5000/fn-tf-serving@sha256:a07f0e6a0a668587a1f78c9988d7385f26ad2490c165cdda461d6c11d9d02234", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "fn-pytorch-cpu", "oci_digest": "localhost:5000/fn-pytorch-cpu@sha256:15cbcb7c96f23aad2c16ac3633725282ba8364690ec965e99289da594d461af5", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "tensorflow-gpu", "oci_digest": "tensorflow/tensorflow@sha256:73fe35b67dad5fa5ab0824ed7efeb586820317566a705dff76142f8949ffcaff", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null},
+    {"id": "pytorch-cuda", "oci_digest": "pytorch/pytorch@sha256:27c3135420bc184e86977170b6158c6133be3c7cc5c35e9e4fa87bdda629dc2b", "nydus_digest": "null", "bootstrap_digest": "null", "conversion_timestamp": null}
+  ]
+}

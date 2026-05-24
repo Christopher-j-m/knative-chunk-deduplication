@@ -1,0 +1,248 @@
+{
+  "description": "FaaS image corpus for chunk overlap analysis",
+  "rationale": "Selected to represent common FaaS workloads with varying degrees of base-layer sharing. Grouped by overlap expectation: high (same runtime), medium (shared system libs), low (different ecosystems).",
+  "images": [
+    {
+      "id": "python-3.14-slim",
+      "source_ref": "python:3.14-slim",
+      "category": "base-runtime",
+      "role": "analysis-only",
+      "overlap_group": "python",
+      "purpose": "Latest stable Python base runtime, shared by many FaaS functions"
+    },
+    {
+      "id": "python-3.13-slim",
+      "source_ref": "python:3.13-slim",
+      "category": "base-runtime",
+      "role": "analysis-only",
+      "overlap_group": "python",
+      "purpose": "Previous stable Python version, tests cross-version chunk sharing"
+    },
+    {
+      "id": "node-26-slim",
+      "source_ref": "node:26-slim",
+      "category": "base-runtime",
+      "role": "analysis-only",
+      "overlap_group": "node",
+      "purpose": "Latest current Node.js base runtime"
+    },
+    {
+      "id": "node-24-slim",
+      "source_ref": "node:24-slim",
+      "category": "base-runtime",
+      "role": "analysis-only",
+      "overlap_group": "node",
+      "purpose": "Latest Node.js LTS version, tests current-vs-LTS chunk sharing"
+    },
+    {
+      "id": "golang-1.26-alpine",
+      "source_ref": "golang:1.26-alpine",
+      "category": "base-runtime",
+      "role": "analysis-only",
+      "overlap_group": "go",
+      "purpose": "Go base runtime (alpine variant)"
+    },
+    {
+      "id": "rust-1.95-slim",
+      "source_ref": "rust:1.95-slim",
+      "category": "base-runtime",
+      "role": "analysis-only",
+      "overlap_group": "rust",
+      "purpose": "Rust base runtime, independent ecosystem"
+    },
+    {
+      "id": "node-express",
+      "source_ref": "node-express",
+      "category": "framework",
+      "role": "analysis-only",
+      "overlap_group": "node",
+      "build": "FROM node:26-slim\nRUN npm install express@5.2.1",
+      "purpose": "Express.js on Node base"
+    },
+    {
+      "id": "node-fastify",
+      "source_ref": "node-fastify",
+      "category": "framework",
+      "role": "analysis-only",
+      "overlap_group": "node",
+      "build": "FROM node:26-slim\nRUN npm install fastify@5.8.5",
+      "purpose": "Fastify on Node base"
+    },
+    {
+      "id": "fn-python-hello",
+      "source_ref": "fn-python-hello",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "python",
+      "build": "FROM python:3.14-slim\nRUN pip install flask==3.1.3\nCOPY handler.py /app/",
+      "purpose": "Minimal Python function (Flask-based)"
+    },
+    {
+      "id": "fn-python-ml",
+      "source_ref": "fn-python-ml",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "python",
+      "build": "FROM python:3.14-slim\nRUN pip install numpy==2.4.4 scikit-learn==1.8.0 flask==3.1.3\nCOPY handler.py /app/",
+      "purpose": "ML inference function, heavy deps"
+    },
+    {
+      "id": "fn-python-api",
+      "source_ref": "fn-python-api",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "python",
+      "build": "FROM python:3.14-slim\nRUN pip install fastapi==0.136.1 uvicorn==0.46.0 httpx==0.28.1\nCOPY handler.py /app/",
+      "purpose": "API gateway function"
+    },
+    {
+      "id": "fn-node-hello",
+      "source_ref": "fn-node-hello",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "node",
+      "build": "FROM node:26-slim\nRUN npm install express@5.2.1\nCOPY handler.js /app/",
+      "purpose": "Minimal Node.js function"
+    },
+    {
+      "id": "fn-node-api",
+      "source_ref": "fn-node-api",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "node",
+      "build": "FROM node:26-slim\nRUN npm install fastify@5.8.5 axios@1.16.0\nCOPY handler.js /app/",
+      "purpose": "Node API function"
+    },
+    {
+      "id": "fn-go-hello",
+      "source_ref": "fn-go-hello",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "go",
+      "build": "FROM golang:1.26-alpine AS build\nCOPY . /app\nRUN go build -o /handler\nFROM alpine:3.23\nCOPY --from=build /handler /handler",
+      "purpose": "Go static binary function, minimal overlap with others"
+    },
+    {
+      "id": "fn-rust-hello",
+      "source_ref": "fn-rust-hello",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "rust",
+      "build": "FROM rust:1.95-slim AS build\nCOPY . /app\nRUN cargo build --release\nFROM debian:trixie-slim\nCOPY --from=build /app/target/release/handler /handler",
+      "purpose": "Rust function, tests low-overlap scenario"
+    },
+    {
+      "id": "fn-java-hello",
+      "source_ref": "fn-java-hello",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "java-jvm",
+      "build": "FROM eclipse-temurin:25-jre-alpine\nCOPY app.jar /app/",
+      "purpose": "Minimal Java HTTP function, establishes JRE base layer for overlap group"
+    },
+    {
+      "id": "fn-java-springboot",
+      "source_ref": "fn-java-springboot",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "java-jvm",
+      "purpose": "Spring Boot REST function; JRE base (~300 MB) shared with fn-java-hello; represents realistic enterprise Java FaaS workload"
+    },
+    {
+      "id": "fn-tf-serving",
+      "source_ref": "fn-tf-serving",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "ml-cpu",
+      "purpose": "TF Serving (CPU) with a minimal SavedModel; ~1.5 GB image, shares TF runtime with other TF-based containers"
+    },
+    {
+      "id": "fn-pytorch-cpu",
+      "source_ref": "fn-pytorch-cpu",
+      "category": "function",
+      "role": "knative-workload",
+      "overlap_group": "ml-cpu",
+      "purpose": "PyTorch CPU inference function on python:3.11-slim; ~1.5 GB image, shares Python base and numpy/scipy with TF CPU container"
+    },
+    {
+      "id": "vllm-openai",
+      "source_ref": "vllm/vllm-openai:v0.21.0-cu129-ubuntu2404",
+      "category": "inference-server",
+      "role": "analysis-only",
+      "overlap_group": "inference",
+      "purpose": "vLLM OpenAI-compatible LLM inference server; analyzed separately to measure overlap across independently built production inference servers"
+    },
+    {
+      "id": "triton-server",
+      "source_ref": "nvcr.io/nvidia/tritonserver:26.04-py3",
+      "category": "inference-server",
+      "role": "analysis-only",
+      "overlap_group": "inference",
+      "purpose": "NVIDIA Triton general-purpose inference server; independent build lineage from the other inference servers"
+    },
+    {
+      "id": "tgi",
+      "source_ref": "ghcr.io/huggingface/text-generation-inference:3.3.4",
+      "category": "inference-server",
+      "role": "analysis-only",
+      "overlap_group": "inference",
+      "purpose": "Hugging Face Text Generation Inference server; independent build lineage from the other inference servers"
+    }
+  ],
+  "overlap_expectations": {
+    "high": "Python functions sharing python:3.14-slim base; ML CPU functions sharing TF/PyTorch runtime layers",
+    "medium": "Node functions sharing node:26-slim base; Java/Spring Boot functions sharing JRE base (~300 MB)",
+    "low": "Go/Rust functions with static binaries and independent base images",
+    "minimal": "Production inference servers built by different vendors; despite serving ML models they share almost no byte-identical content"
+  },
+  "coverage_scenarios": [
+    {
+      "name": "same-runtime-burst",
+      "scope": null,
+      "description": "All Python functions arrive first, then Node, then others",
+      "order": ["fn-python-hello", "fn-python-ml", "fn-python-api", "fn-node-hello", "fn-node-api", "fn-go-hello", "fn-rust-hello", "fn-java-hello"]
+    },
+    {
+      "name": "mixed-workload",
+      "scope": null,
+      "description": "Functions from different runtimes interleaved",
+      "order": ["fn-python-hello", "fn-node-hello", "fn-go-hello", "fn-python-ml", "fn-node-api", "fn-rust-hello", "fn-python-api", "fn-java-hello"]
+    },
+    {
+      "name": "cold-cluster",
+      "scope": null,
+      "description": "Base images cached first (cluster warmup), then functions deploy",
+      "order": ["python-3.14-slim", "node-26-slim", "golang-1.26-alpine", "fn-python-hello", "fn-python-ml", "fn-node-hello", "fn-go-hello"]
+    },
+    {
+      "name": "workload-burst",
+      "scope": "knative-workload",
+      "description": "Same-runtime burst restricted to workload images only",
+      "order": ["fn-python-hello", "fn-python-ml", "fn-python-api", "fn-node-hello", "fn-node-api", "fn-go-hello", "fn-rust-hello", "fn-java-hello"]
+    },
+    {
+      "name": "workload-mixed",
+      "scope": "knative-workload",
+      "description": "Mixed deployment order, workload images only",
+      "order": ["fn-python-hello", "fn-node-hello", "fn-go-hello", "fn-python-ml", "fn-node-api", "fn-rust-hello", "fn-python-api", "fn-java-hello"]
+    },
+    {
+      "name": "random-seed-42",
+      "scope": null,
+      "description": "Seeded random permutation for baseline comparison",
+      "order": null
+    },
+    {
+      "name": "random-seed-123",
+      "scope": null,
+      "description": "Second seeded random permutation",
+      "order": null
+    },
+    {
+      "name": "ml-burst",
+      "scope": "knative-workload",
+      "description": "ML inference functions cold-start first — maximum expected overlap via shared ML runtime layers; thesis headline scenario",
+      "order": ["fn-tf-serving", "fn-pytorch-cpu", "fn-python-ml", "fn-python-hello", "fn-node-hello", "fn-java-springboot", "fn-java-hello", "fn-go-hello", "fn-rust-hello"]
+    }
+  ]
+}
