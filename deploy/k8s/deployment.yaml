@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nydus-cluster-cache
+  labels:
+    app: nydus-cluster-cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nydus-cluster-cache
+  template:
+    metadata:
+      labels:
+        app: nydus-cluster-cache
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+        - name: cache-service
+          image: localhost:5000/nydus-cluster-cache:0.1.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--listen=:8080"
+            - "--store=memory"
+            - "--capacity-bytes=3221225472"
+          env:
+            - name: GOMEMLIMIT
+              value: "4500MiB"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "5Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -243,7 +243,7 @@ func parseBlobsTable(text string) ([]blobMeta, error) {
 			val = strings.ReplaceAll(val, ",", "")
 			v, parseErr := strconv.Atoi(val)
 			if parseErr != nil {
-				return nil, fmt.Errorf("error parsing chunk count %q (blob index %d): %w", val, cur.Index, parseErr)
+				return nil, fmt.Errorf("error parsing Chunk Count %q (blob index %d): %w", val, cur.Index, parseErr)
 			}
 			cur.ChunkCount = v
 			haveCC = true
