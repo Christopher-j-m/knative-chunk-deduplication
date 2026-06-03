@@ -8,14 +8,15 @@ import "fmt"
 type ChunkInfo struct {
 	Hash                      string `json:"hash"`
 	Size                      uint64 `json:"size"`
+	CompressedOffset          uint64 `json:"compressed_offset,omitempty"`
 	CompressedSize            uint64 `json:"compressed_size,omitempty"`
 	CompressedSizeGranularity string `json:"compressed_size_granularity,omitempty"` // "chunk" | "blob" | "unknown"
 	BlobDigest                string `json:"blob_digest,omitempty"`
 	BlobCompressedSize        uint64 `json:"blob_compressed_size,omitempty"`
 	Image                     string `json:"image"`
-	FileIndex  int    `json:"file_index,omitempty"`
-	ChunkIndex int    `json:"chunk_index"`
-	FilePath   string `json:"file_path,omitempty"`
+	FileIndex                 int    `json:"file_index,omitempty"`
+	ChunkIndex                int    `json:"chunk_index"`
+	FilePath                  string `json:"file_path,omitempty"`
 }
 
 // Debugging helper to print a chunk in a human-readable format, showing its hash, size, and source image

@@ -78,13 +78,13 @@ func loadBlobTable(ctx context.Context, bootstrapPath string) ([]blobMeta, error
 	if err != nil {
 		return nil, fmt.Errorf("open inspect stdin pipe: %w", err)
 	}
-	
+
 	defer stdinPipe.Close() //nolint:errcheck
 	stdoutPipe, err := inspectCmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("open inspect stdout pipe: %w", err)
 	}
-	
+
 	inspectCmd.Stderr = io.Discard
 
 	if err := inspectCmd.Start(); err != nil {
@@ -295,17 +295,17 @@ func parseCheckDump(r io.Reader, blobs []blobMeta, imageName string) ([]ChunkInf
 				return nil, fmt.Errorf("error at line %d: %w", lineNum, err)
 			}
 			currentFilePath = path
-			
+
 		case strings.HasPrefix(trimmed, "inode: dir "),
 			strings.HasPrefix(trimmed, "inode: symlink "):
 			currentFilePath = ""
-			
+
 		case strings.HasPrefix(trimmed, "chunk:"):
 			ci, err := parseCheckChunkLine(trimmed, currentFilePath, blobByIndex, imageName, len(chunks))
 			if err != nil {
 				return nil, fmt.Errorf("error at line %d: %w", lineNum, err)
 			}
-			
+
 			if _, ok := seen[ci.Hash]; ok {
 				continue
 			}
@@ -313,7 +313,7 @@ func parseCheckDump(r io.Reader, blobs []blobMeta, imageName string) ([]ChunkInf
 			chunks = append(chunks, ci)
 		}
 	}
-	
+
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("error occured while scan check stdout: %w", err)
 	}
@@ -342,14 +342,15 @@ func parseCheckChunkLine(line, filePath string, blobByIndex map[int]string, imag
 	body := strings.TrimSpace(strings.TrimPrefix(line, "chunk:"))
 
 	var (
-		id             string
-		blobIndex      int
-		haveID         bool
-		haveBlobIndex  bool
-		compressedSize uint64
-		haveCompressed bool
-		uncompSize     uint64
-		haveUncompSize bool
+		id               string
+		blobIndex        int
+		haveID           bool
+		haveBlobIndex    bool
+		compressedOffset uint64
+		compressedSize   uint64
+		haveCompressed   bool
+		uncompSize       uint64
+		haveUncompSize   bool
 	)
 
 	for _, raw := range strings.Split(body, ",") {
@@ -357,13 +358,13 @@ func parseCheckChunkLine(line, filePath string, blobByIndex map[int]string, imag
 		if field == "" {
 			continue
 		}
-		
+
 		// Each field is "<key> <value>" or "<key> <a>/<b>". Split on the first space
 		sp := strings.IndexByte(field, ' ')
 		if sp < 0 {
 			continue
 		}
-		
+
 		key := field[:sp]
 		val := strings.TrimSpace(field[sp+1:])
 
@@ -371,7 +372,7 @@ func parseCheckChunkLine(line, filePath string, blobByIndex map[int]string, imag
 		case "id":
 			id = val
 			haveID = true
-			
+
 		case "blob_index":
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -379,12 +380,13 @@ func parseCheckChunkLine(line, filePath string, blobByIndex map[int]string, imag
 			}
 			blobIndex = n
 			haveBlobIndex = true
-			
+
 		case "compressed":
-			size, err := parseSlashSize(val)
+			offset, size, err := parseSlashOffsetSize(val)
 			if err != nil {
 				return ChunkInfo{}, fmt.Errorf("error while parsing 'compressed' %q: %w", val, err)
 			}
+			compressedOffset = offset
 			compressedSize = size
 			haveCompressed = true
 		case "uncompressed":
@@ -418,6 +420,7 @@ func parseCheckChunkLine(line, filePath string, blobByIndex map[int]string, imag
 	return ChunkInfo{
 		Hash:                      id,
 		Size:                      uncompSize,
+		CompressedOffset:          compressedOffset,
 		CompressedSize:            compressedSize,
 		CompressedSizeGranularity: "chunk",
 		BlobDigest:                blobID,
@@ -439,4 +442,21 @@ func parseSlashSize(s string) (uint64, error) {
 		return 0, fmt.Errorf("non-integer size %q: %w", val, err)
 	}
 	return n, nil
+}
+
+// Parses an offset/size pair and returns both components.
+func parseSlashOffsetSize(s string) (offset uint64, size uint64, err error) {
+	slash := strings.IndexByte(s, '/')
+	if slash < 0 {
+		return 0, 0, fmt.Errorf("expected '<offset>/<size>', got %q", s)
+	}
+	offset, err = strconv.ParseUint(strings.TrimSpace(s[:slash]), 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("non-integer offset in %q: %w", s, err)
+	}
+	size, err = strconv.ParseUint(strings.TrimSpace(s[slash+1:]), 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("non-integer size in %q: %w", s, err)
+	}
+	return offset, size, nil
 }
