@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,6 +33,7 @@ type config struct {
 	populateQueue    int
 	breakerThreshold int
 	breakerCooldown  time.Duration
+	cacheEnabled     bool
 }
 
 func main() {
@@ -59,6 +61,8 @@ func main() {
 			PopulateQueue:    cfg.populateQueue,
 			BreakerThreshold: cfg.breakerThreshold,
 			BreakerCooldown:  cfg.breakerCooldown,
+			CacheDisabled:    !cfg.cacheEnabled,
+			Refresh:          loader.Refresh,
 		},
 	)
 	defer handler.Close()
@@ -78,9 +82,20 @@ func (lr loaderResolver) BlobRepo(blobID string) (string, bool) {
 	return lr.loader.Index().BlobRepo(blobID)
 }
 
+// listenNetwork picks the listener type from the address shape: anything that
+// looks like a filesystem path is a unix socket, everything else is TCP.
+// nydusd only names the requested blob in the URL when it talks TCP, so the
+// cluster deployment uses a loopback TCP address.
+func listenNetwork(address string) string {
+	if strings.Contains(address, "/") {
+		return "unix"
+	}
+	return "tcp"
+}
+
 func parseFlags() config {
 	var cfg config
-	flag.StringVar(&cfg.socket, "listen", "/run/chunk-proxy.sock", "Unix socket nydusd connects to")
+	flag.StringVar(&cfg.socket, "listen", "127.0.0.1:18000", "Address nydusd connects to, a host:port or a unix socket path")
 	flag.StringVar(&cfg.cacheEndpoint, "cache-endpoint", "", "Cluster cache base URL")
 	flag.StringVar(&cfg.registryBase, "registry", "", "Origin registry base URL")
 	flag.StringVar(&cfg.bootstrapDir, "bootstrap-dir", "", "Snapshotter bootstrap root to scan")
@@ -91,6 +106,7 @@ func parseFlags() config {
 	flag.IntVar(&cfg.populateQueue, "populate-queue", 1024, "Async cache populate queue depth")
 	flag.IntVar(&cfg.breakerThreshold, "breaker-threshold", 5, "Consecutive cache failures before opening the breaker")
 	flag.DurationVar(&cfg.breakerCooldown, "breaker-cooldown", 2*time.Second, "Breaker open-to-half-open wait")
+	flag.BoolVar(&cfg.cacheEnabled, "cache-enabled", true, "Serve chunks via the cluster cache; set false to bypass straight to the registry")
 	flag.Parse()
 
 	if cfg.cacheEndpoint == "" || cfg.registryBase == "" || cfg.bootstrapDir == "" {
@@ -103,13 +119,16 @@ func runUntilSignal(cfg config, handler *proxy.Handler, loader *blobindex.Loader
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	_ = os.Remove(cfg.socket)
-	listener, err := net.Listen("unix", cfg.socket)
+	network := listenNetwork(cfg.socket)
+	if network == "unix" {
+		_ = os.Remove(cfg.socket)
+		// Unlink the socket file when we exit so the next start finds a clean path
+		defer os.Remove(cfg.socket)
+	}
+	listener, err := net.Listen(network, cfg.socket)
 	if err != nil {
 		log.Fatalf("listen on %s: %v", cfg.socket, err)
 	}
-	// Unlink the socket file when we exit so the next start finds a clean path
-	defer os.Remove(cfg.socket)
 
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 

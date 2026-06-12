@@ -1,0 +1,16 @@
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    -o /out/chunk-proxy ./cmd/chunk-proxy
+
+# The proxy shells out to nydus-image to read chunk tables from bootstraps;
+# the upstream snapshotter image carries a static build of it
+FROM ghcr.io/containerd/nydus-snapshotter:v0.15.0 AS nydus-tools
+
+FROM alpine:3.23
+COPY --from=build /out/chunk-proxy /usr/local/bin/chunk-proxy
+COPY --from=nydus-tools /opt/nydus-artifacts/usr/local/bin/nydus-image /usr/local/bin/nydus-image
+ENTRYPOINT ["/usr/local/bin/chunk-proxy"]

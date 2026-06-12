@@ -1,0 +1,11 @@
+# containerd drop-in copied to the nodes' config.toml.d by
+# scripts/config-switch.sh for the nydus configurations. Image pulls always go
+# through the cluster-wide snapshotter, so lazy pulling requires making nydus
+# the global default; the second key passes the image layer annotations through
+# to the snapshotter, which the lazy pull depends on (k3s strips them by
+# default and overlayfs ignores them either way)
+version = 2
+
+[plugins."io.containerd.grpc.v1.cri".containerd]
+  snapshotter = "nydus"
+  disable_snapshot_annotations = false

@@ -20,12 +20,14 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
         seccompProfile:
           type: RuntimeDefault
       automountServiceAccountToken: false
       containers:
         - name: cache-service
-          image: localhost:5000/nydus-cluster-cache:0.1.0
+          image: registry.localhost:5000/nydus-cluster-cache:0.1.0
           imagePullPolicy: IfNotPresent
           args:
             - "--listen=:8080"

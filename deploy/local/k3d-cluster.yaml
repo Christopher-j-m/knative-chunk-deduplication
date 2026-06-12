@@ -1,0 +1,31 @@
+# Local three-node k3d cluster. The bootstrap script
+# replaces __PWD__ with the absolute repo path before `k3d cluster create`,
+# because k3d volume sources must be absolute.
+#
+# RUN-TIME NOTE: confirm the in-cluster registry hostname after creation with
+# `k3d registry list`. k3d-created registries are reachable inside the cluster
+# by their k3d name; if image pulls fail, reconcile the registry host used here
+# with the image references in deploy/k8s/** (they currently assume a registry
+# reachable at registry.localhost:5000 / localhost:5000).
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: nydus-cache
+servers: 1
+agents: 2
+registries:
+  create:
+    name: registry.localhost
+    host: "0.0.0.0"
+    hostPort: "5000"
+options:
+  k3s:
+    nodeLabels:
+      - label: nydus-cache/role=worker
+        nodeFilters:
+          - agent:*
+volumes:
+  - volume: __PWD__/deploy/local/containerd-config.toml.tmpl:/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+    nodeFilters:
+      - server:*
+      - agent:*

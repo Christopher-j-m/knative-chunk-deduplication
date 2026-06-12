@@ -1,0 +1,153 @@
+diff --git a/config/daemonconfig/daemonconfig.go b/config/daemonconfig/daemonconfig.go
+index f515185..d669049 100644
+--- a/config/daemonconfig/daemonconfig.go
++++ b/config/daemonconfig/daemonconfig.go
+@@ -23,9 +23,10 @@ import (
+ type StorageBackendType = string
+ 
+ const (
+-	backendTypeLocalfs  StorageBackendType = "localfs"
+-	backendTypeOss      StorageBackendType = "oss"
+-	backendTypeRegistry StorageBackendType = "registry"
++	backendTypeLocalfs   StorageBackendType = "localfs"
++	backendTypeOss       StorageBackendType = "oss"
++	backendTypeRegistry  StorageBackendType = "registry"
++	backendTypeHTTPProxy StorageBackendType = "http-proxy"
+ )
+ 
+ type DaemonConfig interface {
+@@ -83,6 +84,9 @@ type BackendConfig struct {
+ 	BlobRedirectedHost string         `json:"blob_redirected_host,omitempty"`
+ 	Mirrors            []MirrorConfig `json:"mirrors,omitempty"`
+ 
++	// HTTP proxy backend configs
++	Addr string `json:"addr,omitempty"`
++
+ 	// OSS backend configs
+ 	EndPoint        string `json:"endpoint,omitempty"`
+ 	AccessKeyID     string `json:"access_key_id,omitempty" secret:"true"`
+@@ -174,10 +178,11 @@ func SupplementDaemonConfig(c DaemonConfig, imageID, snapshotID string,
+ 		c.Supplement(registryHost, image.Repo, snapshotID, params)
+ 		c.FillAuth(keyChain)
+ 
+-	// Localfs and OSS backends don't need any update,
++	// Localfs, OSS and http-proxy backends don't need any update,
+ 	// just use the provided config in template
+ 	case backendTypeLocalfs:
+ 	case backendTypeOss:
++	case backendTypeHTTPProxy:
+ 	default:
+ 		return errors.Errorf("unknown backend type %s", backendType)
+ 	}
+@@ -185,6 +190,53 @@ func SupplementDaemonConfig(c DaemonConfig, imageID, snapshotID string,
+ 	return nil
+ }
+ 
++// DumpHTTPProxyConfigV2 writes the nydusd version 2 JSON translation of a FUSE
++// daemon configuration whose storage backend is the local http proxy. nydusd
++// only accepts the http-proxy backend in the version 2 format, while the rest
++// of the snapshotter keeps reading the version 1 file.
++func DumpHTTPProxyConfigV2(c *FuseDaemonConfig, path string) error {
++	prefetch := map[string]interface{}{
++		"enable":       c.FSPrefetch.Enable,
++		"threads":      c.FSPrefetch.ThreadsCount,
++		"batch_size":   c.FSPrefetch.MergingSize,
++		"prefetch_all": c.FSPrefetch.PrefetchAll,
++	}
++	rafs := map[string]interface{}{
++		"mode":          c.Mode,
++		"validate":      c.DigestValidate,
++		"enable_xattr":  c.EnableXattr,
++		"iostats_files": c.IOStatsFiles,
++		"prefetch":      prefetch,
++	}
++	if c.AmplifyIo != nil {
++		rafs["batch_size"] = *c.AmplifyIo
++	}
++
++	v2 := map[string]interface{}{
++		"version": 2,
++		"backend": map[string]interface{}{
++			"type": "http-proxy",
++			// the root path makes nydusd request /<blob-id>, which the chunk
++			// proxy needs to know which blob is being asked for
++			"http-proxy": map[string]interface{}{
++				"addr": c.Device.Backend.Config.Addr,
++				"path": "/",
++			},
++		},
++		"cache": map[string]interface{}{
++			"type":      c.Device.Cache.CacheType,
++			"filecache": map[string]interface{}{"work_dir": c.Device.Cache.Config.WorkDir},
++		},
++		"rafs": rafs,
++	}
++
++	b, err := json.Marshal(v2)
++	if err != nil {
++		return errors.Wrapf(err, "marshal v2 config")
++	}
++	return os.WriteFile(path, b, 0600)
++}
++
+ func serializeWithSecretFilter(obj interface{}) map[string]interface{} {
+ 	result := make(map[string]interface{})
+ 	value := reflect.ValueOf(obj)
+diff --git a/pkg/filesystem/fs.go b/pkg/filesystem/fs.go
+index 88b57f6..5d2b330 100644
+--- a/pkg/filesystem/fs.go
++++ b/pkg/filesystem/fs.go
+@@ -38,6 +38,7 @@ import (
+ 	"github.com/containerd/nydus-snapshotter/pkg/signature"
+ 	"github.com/containerd/nydus-snapshotter/pkg/stargz"
+ 	"github.com/containerd/nydus-snapshotter/pkg/tarfs"
++	registryutils "github.com/containerd/nydus-snapshotter/pkg/utils/registry"
+ )
+ 
+ type Filesystem struct {
+@@ -321,6 +322,24 @@ func (fs *Filesystem) Mount(ctx context.Context, snapshotID string, labels map[s
+ 			d.Config = cfg
+ 		}
+ 
++		// nydusd only understands the http-proxy backend in its version 2
++		// configuration format, and the chunk proxy needs the repository name
++		// to fetch blobs from the registry, so persist both translations next
++		// to the regular configuration file and the bootstrap
++		if backendType, _ := cfg.StorageBackend(); backendType == "http-proxy" {
++			if fuseConfig, ok := cfg.(*daemonconfig.FuseDaemonConfig); ok {
++				if err := daemonconfig.DumpHTTPProxyConfigV2(fuseConfig, d.ConfigFile(configSubDir)+".v2"); err != nil {
++					return errors.Wrap(err, "dump v2 daemon configuration file")
++				}
++			}
++			if image, err := registryutils.ParseImage(imageID); err == nil {
++				repoHintPath := path.Join(path.Dir(bootstrap), "image.repo")
++				if err := os.WriteFile(repoHintPath, []byte(image.Repo), 0644); err != nil {
++					return errors.Wrap(err, "write image repo hint")
++				}
++			}
++		}
++
+ 		err = cfg.DumpFile(d.ConfigFile(configSubDir))
+ 		if err != nil {
+ 			if errors.Is(err, errdefs.ErrAlreadyExists) {
+diff --git a/pkg/manager/daemon_adaptor.go b/pkg/manager/daemon_adaptor.go
+index 44c61fb..839f448 100644
+--- a/pkg/manager/daemon_adaptor.go
++++ b/pkg/manager/daemon_adaptor.go
+@@ -155,8 +155,15 @@ func (m *Manager) BuildDaemonCommand(d *daemon.Daemon, bin string, upgrade bool)
+ 				return nil, errors.Wrapf(err, "locate bootstrap %s", bootstrap)
+ 			}
+ 
++			// nydusd gets the version 2 translation when present because the
++			// http-proxy backend cannot be expressed in the version 1 format
++			configFile := d.ConfigFile("")
++			if _, err := os.Stat(configFile + ".v2"); err == nil {
++				configFile += ".v2"
++			}
++
+ 			cmdOpts = append(cmdOpts,
+-				command.WithConfig(d.ConfigFile("")),
++				command.WithConfig(configFile),
+ 				command.WithBootstrap(bootstrap),
+ 			)
+ 			if config.IsBackendSourceEnabled() {

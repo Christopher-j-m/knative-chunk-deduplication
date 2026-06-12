@@ -1,0 +1,24 @@
+# Configurations 2 and 4 workload: uncompressed-Nydus image, lazy-pulled through
+# the nydus snapshotter, which scripts/config-switch.sh makes the cluster-wide
+# containerd default for these configurations. The cache vs no-cache difference
+# is the chunk-proxy --cache-enabled toggle, not this manifest.
+#
+# RUN-TIME NOTE: confirm the Nydus image tag produced by
+# scripts/convert-corpus-uncompressed.sh (assumed ":nydus-none" here) and update
+# it if the conversion uses a different tag.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: fn-python-hello
+  namespace: default
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/min-scale: "0"
+    spec:
+      containers:
+        - image: registry.localhost:5000/fn-python-hello:nydus-none
+          command: ["python", "-m", "http.server", "8080"]
+          ports:
+            - containerPort: 8080

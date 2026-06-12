@@ -1,5 +1,6 @@
 # Build outputs
 /bin/
+/deploy/local/bin/
 
 # Big and/or regenerable files
 analysis/results/*.csv

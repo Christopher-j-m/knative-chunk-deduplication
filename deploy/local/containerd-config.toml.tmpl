@@ -1,0 +1,11 @@
+{{ template "base" . }}
+
+# Registers the node-local nydus snapshotter as a containerd proxy plugin. The
+# grpc socket is created by the host-process snapshotter that
+# scripts/node-snapshotter.sh starts on each node; containerd connects to it
+# lazily, so registering it here is harmless while it is not running (config 1).
+# Whether it actually serves pulls is decided by the global snapshotter drop-in
+# that scripts/config-switch.sh toggles for configurations 2 and 4.
+[proxy_plugins.nydus]
+  type = "snapshot"
+  address = "/run/containerd-nydus/containerd-nydus-grpc.sock"

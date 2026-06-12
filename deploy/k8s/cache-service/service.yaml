@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nydus-cluster-cache
+  labels:
+    app: nydus-cluster-cache
+spec:
+  type: ClusterIP
+  # Pinned so the node-side chunk-proxy can dial the cache from the host network
+  # namespace, where cluster DNS is unavailable. 10.43.0.0/16 is the k3s default
+  # service CIDR; .50 sits outside the low dynamically-allocated range. Confirm
+  # it is free on first bring-up (kubectl get svc -A) and adjust if it collides.
+  clusterIP: 10.43.0.50
+  selector:
+    app: nydus-cluster-cache
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -1,0 +1,33 @@
+# Knative Serving customizations applied after installing the upstream
+# serving-crds / serving-core / kourier manifests, pinned to knative-v1.22.1
+# (built against Kubernetes 1.35, matching the cluster).
+#
+# Apply this with server-side apply so each override merges by field ownership:
+#   kubectl apply --server-side --force-conflicts -f deploy/k8s/knative/serving-config.yaml
+# config-deployment carries a required queue-sidecar-image that the upstream install
+# sets; a plain client-side apply would strip it and the admission webhook would reject.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-network
+  namespace: knative-serving
+data:
+  ingress-class: "kourier.ingress.networking.knative.dev"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-autoscaler
+  namespace: knative-serving
+data:
+  enable-scale-to-zero: "true"
+  scale-to-zero-grace-period: "30s"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-deployment
+  namespace: knative-serving
+data:
+  # the cluster registry is plain HTTP, so let Knative skip tag-to-digest resolution
+  registries-skipping-tag-resolving: "registry.localhost:5000,localhost:5000"

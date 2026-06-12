@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"nydus-cluster-cache/pkg/nydus"
@@ -63,8 +65,15 @@ func (l *Loader) Refresh(ctx context.Context) error {
 			return nil
 		}
 
-		// The image name is the parent directory of the bootstrap file
+		// The image name is the parent directory of the bootstrap file, unless
+		// a sibling image.repo file names the real repository; the snapshotter
+		// writes that hint because its directory layout carries no image name
 		image := filepath.Base(filepath.Dir(path))
+		if hint, hintErr := os.ReadFile(filepath.Join(filepath.Dir(path), "image.repo")); hintErr == nil {
+			if repoName := strings.TrimSpace(string(hint)); repoName != "" {
+				image = repoName
+			}
+		}
 
 		chunks, exErr := l.extract(ctx, path, image)
 		if exErr != nil {

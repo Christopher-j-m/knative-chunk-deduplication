@@ -26,13 +26,29 @@ func New(base string) *Client {
 	}
 }
 
+// blobReference turns a blob identifier into the form the registry API expects.
+// Nydus names blobs by their bare hex digest, while the registry wants the
+// algorithm prefix, so a 64-character hex string becomes sha256:<id>.
+func blobReference(blob string) string {
+	if len(blob) != 64 || strings.Contains(blob, ":") {
+		return blob
+	}
+	for _, character := range blob {
+		isHexDigit := (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')
+		if !isHexDigit {
+			return blob
+		}
+	}
+	return "sha256:" + blob
+}
+
 // GetBlobRange fetches the inclusive byte range [start, end] of a blob from the registry.
 // A registry that honours the Range header replies 206 and the body contains exactly the
 // requested bytes, which are returned as-is. A registry that ignores Range replies 200 with
 // the whole blob; in that case the body is read in full, closed, and sliced down to the
 // requested range before returning, so the caller always receives only the bytes it asked for.
 func (c *Client) GetBlobRange(ctx context.Context, repo, blob string, start, end uint64) (io.ReadCloser, error) {
-	blobURL := fmt.Sprintf("%s/v2/%s/blobs/%s", c.base, repo, blob)
+	blobURL := fmt.Sprintf("%s/v2/%s/blobs/%s", c.base, repo, blobReference(blob))
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, blobURL, nil)
 	if err != nil {
@@ -80,7 +96,7 @@ func (c *Client) GetBlobRange(ctx context.Context, repo, blob string, start, end
 // HeadBlob returns the total size of a blob in bytes by issuing a HEAD request to the registry.
 // The Content-Length header from the response is used to determine the size.
 func (c *Client) HeadBlob(ctx context.Context, repo, blob string) (uint64, error) {
-	blobURL := fmt.Sprintf("%s/v2/%s/blobs/%s", c.base, repo, blob)
+	blobURL := fmt.Sprintf("%s/v2/%s/blobs/%s", c.base, repo, blobReference(blob))
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodHead, blobURL, nil)
 	if err != nil {
