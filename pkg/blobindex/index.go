@@ -26,16 +26,26 @@ type Index struct {
 }
 
 // FromChunks builds an Index from a flat list of ChunkInfo values, grouping by blob
-// and sorting each blob's chunks by their compressed offset.
+// and sorting each blob's chunks by their compressed offset. The same image pulled
+// again feeds its chunks in a second time, so duplicates are collapsed here —
+// a repeated offset would otherwise read as a gap and unalign the whole blob.
 func FromChunks(chunks []nydus.ChunkInfo) *Index {
 	idx := &Index{blobs: make(map[string]*blobEntry)}
+	seen := make(map[string]map[uint64]struct{})
 
 	for _, c := range chunks {
 		entry := idx.blobs[c.BlobDigest]
 		if entry == nil {
 			entry = &blobEntry{repo: c.Image}
 			idx.blobs[c.BlobDigest] = entry
+			seen[c.BlobDigest] = make(map[uint64]struct{})
 		}
+
+		if _, duplicate := seen[c.BlobDigest][c.CompressedOffset]; duplicate {
+			continue
+		}
+		seen[c.BlobDigest][c.CompressedOffset] = struct{}{}
+
 		entry.chunks = append(entry.chunks, Chunk{
 			Offset: c.CompressedOffset,
 			Size:   c.CompressedSize,

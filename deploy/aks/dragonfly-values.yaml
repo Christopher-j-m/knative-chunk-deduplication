@@ -1,0 +1,39 @@
+# Helm values for the Dragonfly p2p stack that backs evaluation config 3.
+# Install pins chart 1.7.0 (app 2.5.0); substitute the registry first:
+#   sed "s|__ACR__|${ACR}|" deploy/aks/dragonfly-values.yaml \
+#     | helm install dragonfly dragonfly/dragonfly --version 1.7.0 \
+#         -n dragonfly-system --create-namespace -f -
+# The client DaemonSet runs with hostNetwork so nydusd on each node reaches
+# the proxy at 127.0.0.1:4001 and the health endpoint at 127.0.0.1:4003.
+# Piece caches must not outlive a benchmark reset, so everything lands on
+# emptyDir volumes that die with the pod when the reset recycles it.
+# The seed peer stays disabled: Dragonfly authenticates back-to-source
+# fetches only with the headers of the original request, and a seed peer
+# fetches with no headers at all — against ACR, whose anonymous pull still
+# demands the bearer-token challenge, every seed fetch dies with 401 and
+# each cold task wastes ~6 s failing through the seed before the requesting
+# client falls back to the source with nydusd's valid token. Without the
+# seed role the scheduler matches client-to-client parents directly, which
+# keeps the p2p exchange and gives back-to-source requests working auth
+client:
+  config:
+    proxy:
+      registryMirror:
+        addr: https://__ACR__
+manager:
+  replicas: 1
+scheduler:
+  replicas: 1
+  config:
+    seedPeer:
+      enable: false
+    # Without a seed peer a brand-new task has no possible parent, yet the
+    # stock scheduler still walks its full retry ladder (3 tries, 2 s apart)
+    # before authorizing back-to-source — a flat ~5 s tax on the first
+    # fetch of every blob. One quick retry keeps parent scheduling for the
+    # scale-out phase while letting peerless tasks reach the registry fast
+    scheduler:
+      retryBackToSourceLimit: 1
+      retryInterval: 500ms
+seedClient:
+  enable: false

@@ -15,6 +15,7 @@ import (
 type Client struct {
 	base       string
 	httpClient *http.Client
+	tokens     tokenCache
 }
 
 // New creates a Client that targets the given registry base URL.
@@ -57,7 +58,7 @@ func (c *Client) GetBlobRange(ctx context.Context, repo, blob string, start, end
 
 	request.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
 
-	response, err := c.httpClient.Do(request)
+	response, err := c.do(request, repo)
 	if err != nil {
 		return nil, fmt.Errorf("registry get %s: %w", blob, err)
 	}
@@ -103,7 +104,7 @@ func (c *Client) HeadBlob(ctx context.Context, repo, blob string) (uint64, error
 		return 0, fmt.Errorf("registry head %s: build request: %w", blob, err)
 	}
 
-	response, err := c.httpClient.Do(request)
+	response, err := c.do(request, repo)
 	if err != nil {
 		return 0, fmt.Errorf("registry head %s: %w", blob, err)
 	}

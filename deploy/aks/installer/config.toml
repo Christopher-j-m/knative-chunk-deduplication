@@ -1,0 +1,16 @@
+# Snapshotter daemon config installed to /etc/nydus/config.toml on every AKS
+# node by the nydus-node-setup DaemonSet. AKS variant of
+# deploy/local/snapshotter/config.toml: plain host paths, no k3s prefixes.
+version = 1
+root = "/var/lib/containerd-nydus"
+address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
+daemon_mode = "multiple"
+[daemon]
+nydusd_path = "/usr/local/bin/nydusd"
+nydusd_config = "/etc/nydus/nydusd-config.json"
+fs_driver = "fusedev"
+[snapshot]
+enable_kata_volume = false
+[remote]
+[remote.auth]
+enable_keychain = false

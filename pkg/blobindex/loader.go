@@ -20,9 +20,10 @@ type Extractor func(ctx context.Context, bootstrapPath, imageName string) ([]nyd
 // It tracks which bootstraps have already been read so repeated refreshes only pay
 // for newly appeared files.
 type Loader struct {
-	root          string
-	bootstrapName string
-	extract       Extractor
+	root            string
+	bootstrapName   string
+	extract         Extractor
+	requireRepoHint bool
 
 	mu     sync.RWMutex
 	seen   map[string]struct{}
@@ -30,16 +31,32 @@ type Loader struct {
 	index  *Index
 }
 
+// Option customises how a Loader treats the bootstrap files it discovers.
+type Option func(*Loader)
+
+// RequireRepoHint makes the Loader hold off on any bootstrap whose sibling image.repo
+// file has not been written yet, leaving it unseen so a later refresh indexes it once
+// the hint exists. The snapshotter unpacks the bootstrap before its mount step writes
+// the hint, and indexing inside that window would pin the blobs to the meaningless
+// parent directory name for good.
+func RequireRepoHint() Option {
+	return func(l *Loader) { l.requireRepoHint = true }
+}
+
 // NewLoader creates a Loader that walks dir looking for files named bootstrapName and
 // calls extract to obtain chunk metadata for each one it finds.
-func NewLoader(dir, bootstrapName string, extract Extractor) *Loader {
-	return &Loader{
+func NewLoader(dir, bootstrapName string, extract Extractor, opts ...Option) *Loader {
+	loader := &Loader{
 		root:          dir,
 		bootstrapName: bootstrapName,
 		extract:       extract,
 		seen:          make(map[string]struct{}),
 		index:         FromChunks(nil),
 	}
+	for _, opt := range opts {
+		opt(loader)
+	}
+	return loader
 }
 
 // Refresh walks the root directory, extracts chunks from any bootstrap files not yet
@@ -69,10 +86,19 @@ func (l *Loader) Refresh(ctx context.Context) error {
 		// a sibling image.repo file names the real repository; the snapshotter
 		// writes that hint because its directory layout carries no image name
 		image := filepath.Base(filepath.Dir(path))
+		hinted := false
 		if hint, hintErr := os.ReadFile(filepath.Join(filepath.Dir(path), "image.repo")); hintErr == nil {
 			if repoName := strings.TrimSpace(string(hint)); repoName != "" {
 				image = repoName
+				hinted = true
 			}
+		}
+
+		// The hint arrives a moment after the bootstrap itself, so when hints are
+		// required an unhinted bootstrap is simply not ready yet: leave it unseen
+		// and let a later refresh index it under its real repository
+		if l.requireRepoHint && !hinted {
+			return nil
 		}
 
 		chunks, exErr := l.extract(ctx, path, image)

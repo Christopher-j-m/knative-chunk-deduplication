@@ -14,3 +14,9 @@ images/fn-tf-serving/saved_model/
 # Python
 __pycache__/
 .venv-analysis/
+
+# TF
+.terraform/
+.terraform.lock.hcl
+*.tfstate*
+*.tfvars

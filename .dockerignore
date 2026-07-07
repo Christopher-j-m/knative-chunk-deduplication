@@ -3,3 +3,5 @@
 !go.sum
 !cmd/
 !pkg/
+!deploy/local/bin/
+!deploy/aks/installer/

@@ -46,7 +46,7 @@ func main() {
 		}
 		return ic.Chunks, nil
 	}
-	loader := blobindex.NewLoader(cfg.bootstrapDir, cfg.bootstrapName, extract)
+	loader := blobindex.NewLoader(cfg.bootstrapDir, cfg.bootstrapName, extract, blobindex.RequireRepoHint())
 	if err := loader.Refresh(context.Background()); err != nil {
 		log.Printf("initial index refresh: %v", err)
 	}

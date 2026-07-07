@@ -1,0 +1,26 @@
+# Knative Serving customizations for AKS, applied AFTER the upstream
+# serving-crds / serving-core / kourier manifests (knative-v1.22.1).
+# Apply with server-side apply so field ownership merges:
+#   kubectl apply --server-side --force-conflicts -f deploy/k8s/aks/serving-config.yaml
+# (config-deployment carries a required queue-sidecar-image set by the
+# install; client-side apply would strip it and the webhook rejects that.)
+#
+# Unlike the local variant there is no registries-skipping-tag-resolving:
+# ACR is HTTPS with anonymous pull, so Knative's tag-to-digest resolution
+# works, and digest pinning keeps cluster-reset-aks.sh's purge-by-repo exact.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-network
+  namespace: knative-serving
+data:
+  ingress-class: "kourier.ingress.networking.knative.dev"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-autoscaler
+  namespace: knative-serving
+data:
+  enable-scale-to-zero: "true"
+  scale-to-zero-grace-period: "30s"

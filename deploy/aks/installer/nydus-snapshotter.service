@@ -1,0 +1,11 @@
+[Unit]
+Description=nydus snapshotter (containerd proxy plugin)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+# Converges every AKS node (init container) and stays resident as the
+# host-exec vehicle (main container) for config switching, reset, and
+# benchmarks. hostPID + privileged: nsenter into the host is the whole point.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nydus-node-setup
+  namespace: kube-system
+  labels:
+    app: nydus-node-setup
+spec:
+  selector:
+    matchLabels:
+      app: nydus-node-setup
+  template:
+    metadata:
+      labels:
+        app: nydus-node-setup
+    spec:
+      hostPID: true
+      initContainers:
+        - name: install
+          image: __ACR__/nydus-node-installer:0.1.1
+          securityContext:
+            privileged: true
+          command:
+            - sh
+            - -c
+            - |
+              cp -r /payload/. /host-stage/ \
+              && nsenter -t 1 -m -p -- sh /opt/nydus-installer/install.sh
+          volumeMounts:
+            - { name: stage, mountPath: /host-stage }
+      containers:
+        - name: agent
+          image: __ACR__/nydus-node-installer:0.1.1
+          securityContext:
+            privileged: true
+          command: ["sleep", "infinity"]
+      volumes:
+        - name: stage
+          hostPath: { path: /opt/nydus-installer, type: DirectoryOrCreate }

@@ -1,0 +1,23 @@
+{
+  "device": {
+    "backend": {
+      "type": "http-proxy",
+      "config": { "addr": "http://127.0.0.1:18000" }
+    },
+    "cache": {
+      "type": "blobcache",
+      "config": { "work_dir": "/var/lib/containerd-nydus/cache" }
+    }
+  },
+  "mode": "direct",
+  "digest_validate": false,
+  "iostats_files": false,
+  "enable_xattr": true,
+  "amplify_io": 1048576,
+  "fs_prefetch": {
+    "enable": false,
+    "threads_count": 8,
+    "merging_size": 1048576,
+    "prefetch_all": false
+  }
+}

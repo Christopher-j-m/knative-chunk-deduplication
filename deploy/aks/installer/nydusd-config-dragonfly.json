@@ -1,0 +1,36 @@
+{
+  "device": {
+    "backend": {
+      "type": "registry",
+      "config": {
+        "scheme": "https",
+        "timeout": 10,
+        "connect_timeout": 10,
+        "retry_limit": 2,
+        "mirrors": [
+          {
+            "host": "http://127.0.0.1:4001",
+            "auth_through": false,
+            "headers": { "X-Dragonfly-Registry": "__REGISTRY__" },
+            "ping_url": "http://127.0.0.1:4003/healthy"
+          }
+        ]
+      }
+    },
+    "cache": {
+      "type": "blobcache",
+      "config": { "work_dir": "/var/lib/containerd-nydus/cache" }
+    }
+  },
+  "mode": "direct",
+  "digest_validate": false,
+  "iostats_files": false,
+  "enable_xattr": true,
+  "amplify_io": 1048576,
+  "fs_prefetch": {
+    "enable": false,
+    "threads_count": 8,
+    "merging_size": 1048576,
+    "prefetch_all": false
+  }
+}

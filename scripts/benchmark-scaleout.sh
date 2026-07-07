@@ -11,20 +11,70 @@ set -euo pipefail
 # give registry traffic realistic latency, otherwise the local registry is
 # too fast for the configurations to differ.
 #
-# Usage: benchmark-scaleout.sh <1|2|4> <repetitions> [outfile]
+# Usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile]
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG="${1:?usage: benchmark-scaleout.sh <1|2|4> <repetitions> [outfile]}"
-REPS="${2:?usage: benchmark-scaleout.sh <1|2|4> <repetitions> [outfile]}"
+CONFIG="${1:?usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile]}"
+REPS="${2:?usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile]}"
 OUTFILE="${3:-${REPO_ROOT}/analysis/results/benchmarks/scaleout-config${CONFIG}-$(date +%Y%m%dT%H%M%S).csv}"
 
-CACHE_IP="10.43.0.50:8080"
-SERVICE="fn-python-hello"
+# Overridable so the same harness runs on AKS (cache at 10.0.0.50, reset via
+# cluster-reset-aks.sh) and locally with the defaults
+CACHE_IP="${CACHE_IP:-10.43.0.50:8080}"
+RESET_SCRIPT="${RESET_SCRIPT:-${REPO_ROOT}/scripts/cluster-reset.sh}"
+SERVICE="${SERVICE:-fn-python-hello}"
 READY_TIMEOUT=420
 case "${CONFIG}" in
-  1) WORKLOAD="${REPO_ROOT}/deploy/k8s/knative/workload-oci.yaml" ;;
-  2|4) WORKLOAD="${REPO_ROOT}/deploy/k8s/knative/workload-nydus.yaml" ;;
-  *) echo "unknown config ${CONFIG}; choose 1, 2, or 4" >&2; exit 1 ;;
+  1) WORKLOAD="${WORKLOAD:-${REPO_ROOT}/deploy/k8s/knative/workload-oci.yaml}" ;;
+  2|3|4) WORKLOAD="${WORKLOAD:-${REPO_ROOT}/deploy/k8s/knative/workload-nydus.yaml}" ;;
+  *) echo "unknown config ${CONFIG}; choose 1, 2, 3, or 4" >&2; exit 1 ;;
 esac
+
+# The p2p disk caches survive a plain workload reset, so the reset script
+# additionally recycles the Dragonfly pods when this configuration runs
+[[ "${CONFIG}" == "3" ]] && export RESET_DRAGONFLY=1
+
+# The cache toggle lives in the chunk-proxy DaemonSet and any manifest
+# re-apply quietly resets it to the default, which would invalidate every
+# sample without failing anything, so refuse to measure until the flag
+# matches the configuration under test
+case "${CONFIG}" in
+  2) wanted_cache_flag="--cache-enabled=false" ;;
+  4) wanted_cache_flag="--cache-enabled=true" ;;
+  *) wanted_cache_flag="" ;;
+esac
+if [[ -n "${wanted_cache_flag}" ]]; then
+  proxy_args="$(kubectl -n kube-system get ds chunk-proxy -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || true)"
+  if [[ "${proxy_args}" != *"${wanted_cache_flag}"* ]]; then
+    echo "chunk-proxy runs ${proxy_args} but config ${CONFIG} needs ${wanted_cache_flag}; run config-switch first" >&2
+    exit 1
+  fi
+fi
+
+# The nydusd backend template decides whether chunk reads go through the
+# chunk-proxy or through Dragonfly, and a leftover template from the other
+# nydus configuration would silently measure the wrong system. Only the AKS
+# cluster carries the node-setup DaemonSet, so local runs skip this check
+if kubectl -n kube-system get ds nydus-node-setup >/dev/null 2>&1; then
+  case "${CONFIG}" in
+    2|4) wanted_backend='"type": "http-proxy"' ;;
+    3) wanted_backend='"type": "registry"' ;;
+    *) wanted_backend="" ;;
+  esac
+  if [[ -n "${wanted_backend}" ]]; then
+    for setup_pod in $(kubectl -n kube-system get pods -l app=nydus-node-setup -o name); do
+      if ! kubectl -n kube-system exec "${setup_pod#pod/}" -- nsenter -t 1 -m -p -- \
+          grep -q "${wanted_backend}" /etc/nydus/nydusd-config.json; then
+        echo "nydusd template on ${setup_pod} does not match config ${CONFIG}; run config-switch first" >&2
+        exit 1
+      fi
+      if [[ "${CONFIG}" == "3" ]] && ! kubectl -n kube-system exec "${setup_pod#pod/}" -- \
+          nsenter -t 1 -m -p -n -- curl -sf -m 5 http://127.0.0.1:4003/healthy >/dev/null; then
+        echo "dfdaemon is not answering on ${setup_pod}; Dragonfly must be healthy for config 3" >&2
+        exit 1
+      fi
+    done
+  fi
+fi
 
 # A long-lived in-cluster pod doubles as the metrics scraper, so each sample
 # is one fast exec instead of a fresh pod launch. It is recreated per
@@ -116,14 +166,14 @@ reset_probe_pod
 # switch absorbs control-plane warm-up from the node cycle and measures tens
 # of seconds instead of the steady state
 echo "=== config ${CONFIG} warmup (discarded)"
-"${REPO_ROOT}/scripts/cluster-reset.sh" >/dev/null
+"${RESET_SCRIPT}" >/dev/null
 ensure_probe_pod
 apply_with_min_scale 1
 kubectl wait ksvc/${SERVICE} --for=condition=Ready --timeout=300s >/dev/null
 
 for rep in $(seq 1 "${REPS}"); do
   echo "=== config ${CONFIG} rep ${rep}/${REPS}"
-  "${REPO_ROOT}/scripts/cluster-reset.sh" >/dev/null
+  "${RESET_SCRIPT}" >/dev/null
   ensure_probe_pod
 
   # Seed phase: one pod cold-starts on a fresh cluster and, in the cached
@@ -168,6 +218,24 @@ for rep in $(seq 1 "${REPS}"); do
     echo "  scale  node=${node} warm=${warm} ready=${ready}s"
   done <<<"${scale_ready}"
   echo "  scale  hits+=${hits_delta} misses+=${misses_delta}"
+
+  # Without proof that Dragonfly actually moved the bytes, config 3 is
+  # indistinguishable from a plain registry rerun, so the download activity
+  # of every peer is captured next to the CSV while the pods still exist —
+  # the next repetition's reset recycles them and the logs vanish with them
+  if [[ "${CONFIG}" == "3" ]]; then
+    evidence="${OUTFILE%.csv}.dragonfly-evidence.log"
+    {
+      echo "=== rep ${rep} $(date -u +%FT%TZ)"
+      for client_pod in $(kubectl -n dragonfly-system get pods -l component=client -o name) \
+                        $(kubectl -n dragonfly-system get pods -l component=seed-client -o name); do
+        echo "--- ${client_pod}"
+        kubectl -n dragonfly-system logs "${client_pod#pod/}" --since=20m 2>/dev/null \
+          | grep -aE "download (task|piece).*(succeeded|finished)|back-to-source|proxy_via_dfdaemon" \
+          | tail -400
+      done
+    } >>"${evidence}" 2>/dev/null || true
+  fi
 done
 
 echo "Done: ${OUTFILE}"

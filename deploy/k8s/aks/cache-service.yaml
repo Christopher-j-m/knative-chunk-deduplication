@@ -1,0 +1,85 @@
+# AKS variant of deploy/k8s/cache-service. Differences: image comes from ACR
+# (__ACR__ rendered by sed at apply time) and the pinned ClusterIP moves to
+# the AKS service CIDR (10.0.0.0/16, pinned in deploy/terraform).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nydus-cluster-cache
+  labels:
+    app: nydus-cluster-cache
+spec:
+  replicas: 1
+  # Recreate keeps the cache a single pod at all times: the rolling default
+  # briefly runs two pods on every benchmark reset, splitting chunk traffic
+  # and hit counters between two separate in-memory stores and quietly
+  # corrupting the measurement. The moment of downtime lands inside the
+  # reset window where nothing fetches
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nydus-cluster-cache
+  template:
+    metadata:
+      labels:
+        app: nydus-cluster-cache
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+        - name: cache-service
+          image: __ACR__/nydus-cluster-cache:0.1.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--listen=:8080"
+            - "--store=memory"
+            - "--capacity-bytes=3221225472"
+          env:
+            - name: GOMEMLIMIT
+              value: "4500MiB"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: { cpu: "200m", memory: "4Gi" }
+            limits: { cpu: "2", memory: "5Gi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nydus-cluster-cache
+  labels:
+    app: nydus-cluster-cache
+spec:
+  type: ClusterIP
+  # Pinned so the host-network chunk-proxy can dial the cache without cluster
+  # DNS. .50 sits outside the low allocated range; confirm free on first
+  # bring-up (kubectl get svc -A) and adjust here + chunk-proxy.yaml if not.
+  clusterIP: 10.0.0.50
+  selector:
+    app: nydus-cluster-cache
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
