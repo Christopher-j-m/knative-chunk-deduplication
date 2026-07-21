@@ -1,0 +1,11 @@
+pair,rep,phase,service,node,ready_seconds,pull_seconds,cache_hits_delta,cache_misses_delta
+fn-python-hello+fn-python-ml,1,seed,fn-python-hello,aks-node-000007,9.889,0.780,0,1254
+fn-python-hello+fn-python-ml,1,cross,fn-python-ml,aks-node-000006,13.922,0.650,1113,479
+fn-python-hello+fn-python-ml,2,seed,fn-python-hello,aks-node-000006,15.184,0.534,0,1254
+fn-python-hello+fn-python-ml,2,cross,fn-python-ml,aks-node-000007,13.971,0.547,1113,479
+fn-python-hello+fn-python-ml,3,seed,fn-python-hello,aks-node-000007,15.992,0.629,0,1254
+fn-python-hello+fn-python-ml,3,cross,fn-python-ml,aks-node-000006,13.987,0.599,1113,479
+fn-python-hello+fn-python-ml,4,seed,fn-python-hello,aks-node-000006,14.590,0.534,0,1254
+fn-python-hello+fn-python-ml,4,cross,fn-python-ml,aks-node-000007,13.574,0.557,1113,479
+fn-python-hello+fn-python-ml,5,seed,fn-python-hello,aks-node-000007,15.150,0.637,0,1254
+fn-python-hello+fn-python-ml,5,cross,fn-python-ml,aks-node-000006,4.930,0.521,1113,479

@@ -12,7 +12,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NODES=(k3d-nydus-cache-server-0 k3d-nydus-cache-agent-0 k3d-nydus-cache-agent-1)
 DROPIN=/var/lib/rancher/k3s/agent/etc/containerd/config.toml.d/nydus-global.toml
 CTR="ctr -a /run/k3s/containerd/containerd.sock -n k8s.io"
-WORKLOAD_REPO=registry.localhost:5000/fn-python-hello
+SERVICE="${SERVICE:-fn-python-hello}"
+WORKLOAD_REPO="${WORKLOAD_REPO:-registry.localhost:5000/${SERVICE}}"
 
 # Removes every reference to the workload image from one node — Knative
 # resolves tags to digests, so both the tagged and the digest-pinned
@@ -36,8 +37,8 @@ purge_workload_images() {
 }
 
 echo "Removing the workload so its image can be purged from the nodes"
-kubectl delete ksvc fn-python-hello --ignore-not-found --timeout=120s
-kubectl wait --for=delete pod -l serving.knative.dev/service=fn-python-hello --timeout=120s 2>/dev/null || true
+kubectl delete ksvc "${SERVICE}" --ignore-not-found --timeout=120s
+kubectl wait --for=delete pod -l "serving.knative.dev/service=${SERVICE}" --timeout=120s 2>/dev/null || true
 
 echo "Restarting cache-service to clear in-memory contents"
 kubectl rollout restart deploy/nydus-cluster-cache

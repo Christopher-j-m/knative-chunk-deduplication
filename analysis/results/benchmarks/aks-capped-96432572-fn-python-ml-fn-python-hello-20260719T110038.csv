@@ -1,0 +1,16 @@
+pair,capacity_bytes,rep,phase,service,node,ready_seconds,pull_seconds,cache_hits_delta,cache_misses_delta,cache_stored_bytes
+fn-python-ml+fn-python-hello,96432572,1,seed,fn-python-ml,aks-node-00000b,14.548,0.570,0,1592,74536593
+fn-python-ml+fn-python-hello,96432572,1,cross,fn-python-hello,aks-node-00000a,3.122,0.542,1113,141,77594939
+fn-python-ml+fn-python-hello,96432572,1,alt,fn-python-ml,aks-node-000009,3.714,0.521,1592,0,77594939
+fn-python-ml+fn-python-hello,96432572,2,seed,fn-python-ml,aks-node-00000a,14.119,0.581,0,1592,74536593
+fn-python-ml+fn-python-hello,96432572,2,cross,fn-python-hello,aks-node-00000b,3.480,0.680,1113,141,77594939
+fn-python-ml+fn-python-hello,96432572,2,alt,fn-python-ml,aks-node-000009,3.689,0.505,1592,0,77594939
+fn-python-ml+fn-python-hello,96432572,3,seed,fn-python-ml,aks-node-00000b,15.135,0.573,0,1592,74536593
+fn-python-ml+fn-python-hello,96432572,3,cross,fn-python-hello,aks-node-00000a,3.514,0.526,1113,141,77594939
+fn-python-ml+fn-python-hello,96432572,3,alt,fn-python-ml,aks-node-000009,3.768,0.484,1592,0,77594939
+fn-python-ml+fn-python-hello,96432572,4,seed,fn-python-ml,aks-node-00000a,14.310,0.537,0,1592,74536593
+fn-python-ml+fn-python-hello,96432572,4,cross,fn-python-hello,aks-node-00000b,3.515,0.636,1113,141,77594939
+fn-python-ml+fn-python-hello,96432572,4,alt,fn-python-ml,aks-node-000009,3.822,0.575,1592,0,77594939
+fn-python-ml+fn-python-hello,96432572,5,seed,fn-python-ml,aks-node-00000a,14.564,0.542,0,1592,74536593
+fn-python-ml+fn-python-hello,96432572,5,cross,fn-python-hello,aks-node-00000b,4.162,0.648,1113,141,77594939
+fn-python-ml+fn-python-hello,96432572,5,alt,fn-python-ml,aks-node-000009,4.062,0.584,1592,0,77594939

@@ -33,19 +33,38 @@ run_tc() {
     "${HELPER_IMAGE}" "$@"
 }
 
+# Docker hands out eth0/eth1 in attach order, and that order can change when
+# the container restarts, so the device carrying the cluster-network address
+# has to be looked up instead of assumed. Shaping the wrong device silently
+# leaves cluster traffic at full speed
+cluster_device() {
+  local cluster_ip
+  cluster_ip="$(docker inspect \
+    -f '{{(index .NetworkSettings.Networks "k3d-nydus-cache").IPAddress}}' \
+    "${REGISTRY_CONTAINER}")"
+  docker run --rm "--net=container:${REGISTRY_CONTAINER}" --entrypoint ip \
+    "${HELPER_IMAGE}" -o -4 addr show \
+    | awk -v wanted="${cluster_ip}/" 'index($4, wanted) == 1 { print $2; exit }'
+}
+
 ensure_helper_image
+DEVICE="$(cluster_device)"
+if [[ -z "${DEVICE}" ]]; then
+  echo "could not find the registry device on the cluster network" >&2
+  exit 1
+fi
 
 case "${ACTION}" in
   on)
-    run_tc qdisc replace dev eth0 root netem delay "${DELAY}" rate "${RATE}"
-    echo "Registry egress shaped: delay ${DELAY}, rate ${RATE}"
+    run_tc qdisc replace dev "${DEVICE}" root netem delay "${DELAY}" rate "${RATE}"
+    echo "Registry egress shaped on ${DEVICE}: delay ${DELAY}, rate ${RATE}"
     ;;
   off)
-    run_tc qdisc del dev eth0 root 2>/dev/null || true
+    run_tc qdisc del dev "${DEVICE}" root 2>/dev/null || true
     echo "Registry egress shaping removed"
     ;;
   status)
-    run_tc qdisc show dev eth0
+    run_tc qdisc show dev "${DEVICE}"
     ;;
   *)
     echo "unknown action ${ACTION}; choose on, off, or status" >&2

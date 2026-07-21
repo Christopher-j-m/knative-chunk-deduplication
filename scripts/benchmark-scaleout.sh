@@ -22,7 +22,7 @@ OUTFILE="${3:-${REPO_ROOT}/analysis/results/benchmarks/scaleout-config${CONFIG}-
 CACHE_IP="${CACHE_IP:-10.43.0.50:8080}"
 RESET_SCRIPT="${RESET_SCRIPT:-${REPO_ROOT}/scripts/cluster-reset.sh}"
 SERVICE="${SERVICE:-fn-python-hello}"
-READY_TIMEOUT=420
+READY_TIMEOUT="${READY_TIMEOUT:-420}"
 case "${CONFIG}" in
   1) WORKLOAD="${WORKLOAD:-${REPO_ROOT}/deploy/k8s/knative/workload-oci.yaml}" ;;
   2|3|4) WORKLOAD="${WORKLOAD:-${REPO_ROOT}/deploy/k8s/knative/workload-nydus.yaml}" ;;
