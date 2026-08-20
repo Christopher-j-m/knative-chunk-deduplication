@@ -1,0 +1,16 @@
+config,rep,phase,node,warm,ready_seconds,pull_seconds,cache_hits_delta,cache_misses_delta
+4,1,seed,k3d-nydus-cache-server-0,no,9.086,0.062,0,4017
+4,1,scaleout,k3d-nydus-cache-server-0,yes,2.594,0,4017,0
+4,1,scaleout,k3d-nydus-cache-agent-1,no,5.295,0.057,4017,0
+4,2,seed,k3d-nydus-cache-agent-1,no,8.840,0.074,0,4017
+4,2,scaleout,k3d-nydus-cache-agent-1,yes,2.838,0,4017,0
+4,2,scaleout,k3d-nydus-cache-agent-0,no,6.835,0.059,4017,0
+4,3,seed,k3d-nydus-cache-server-0,no,8.956,0.057,0,4017
+4,3,scaleout,k3d-nydus-cache-server-0,yes,3.258,0,4017,0
+4,3,scaleout,k3d-nydus-cache-agent-1,no,5.825,0.055,4017,0
+4,4,seed,k3d-nydus-cache-server-0,no,9.462,0.058,0,4017
+4,4,scaleout,k3d-nydus-cache-agent-1,no,6.178,0.055,8034,0
+4,4,scaleout,k3d-nydus-cache-agent-0,no,6.181,0.058,8034,0
+4,5,seed,k3d-nydus-cache-server-0,no,9.632,0.061,0,4017
+4,5,scaleout,k3d-nydus-cache-server-0,yes,2.875,0,4017,0
+4,5,scaleout,k3d-nydus-cache-agent-1,no,5.873,0.058,4017,0

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Summarize the netem RTT sweep benchmark CSVs into one table.
 
-Reads every netem-sweep cell CSV from analysis/results/benchmarks and writes
+Reads every netem-sweep cell CSV from a benchmark directory and writes
 per-cell cold, warm, and seed statistics next to the other summaries. Run with:
-uv run --with pandas scripts/summarize-netem-sweep.py
+uv run --with pandas scripts/summarize-netem-sweep.py [benchmark-dir]
 """
 
+import argparse
 import glob
 import os
 import re
@@ -38,9 +39,19 @@ def cell_stats(frame):
     }
 
 
+# Reads the cell CSVs of one benchmark directory, defaulting to the campaign
+# results. Naming an archived directory summarizes that campaign instead.
+def parse_arguments():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("benchmark_dir", nargs="?", default=BENCH)
+    return parser.parse_args()
+
+
 def main():
+    benchmark_dir = parse_arguments().benchmark_dir
+
     rows = []
-    for path in sorted(glob.glob(os.path.join(BENCH, "netem-sweep-config*.csv"))):
+    for path in sorted(glob.glob(os.path.join(benchmark_dir, "netem-sweep-config*.csv"))):
         match = CELL_PATTERN.search(os.path.basename(path))
         if not match:
             continue
@@ -53,7 +64,14 @@ def main():
         })
 
     table = pd.DataFrame(rows).sort_values(["image", "config", "rtt_ms", "rate"])
-    table.to_csv(OUT, index=False)
+
+    # Only the campaign directory owns the summary file; summarizing an
+    # archived run is a read-only look that must not overwrite it
+    if os.path.realpath(benchmark_dir) == os.path.realpath(BENCH):
+        table.to_csv(OUT, index=False)
+    else:
+        print(f"# {benchmark_dir} is not the campaign directory, {OUT} left alone")
+
     print(table.to_string(index=False))
 
 

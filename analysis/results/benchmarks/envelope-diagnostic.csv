@@ -1,0 +1,6 @@
+pod,node,config,harness_ready_s,k8s_ready_s,probe_period_s,mode
+fn-python-hello-00001-deployment-74dcf9b4f-ncv6v,k3d-nydus-cache-server-0,4,,1.000,10,fast
+fn-python-hello-00001-deployment-6bc7f69f98-ftfx7,k3d-nydus-cache-agent-1,2,,82.000,10,unexplained
+fn-python-hello-00002-deployment-bfd859c58-4fcwm,k3d-nydus-cache-server-0,2,12.770,12.000,10,quantized
+fn-python-hello-00002-deployment-bfd859c58-7958v,k3d-nydus-cache-agent-0,2,4.240,4.000,10,fast
+fn-python-hello-00002-deployment-bfd859c58-9fkhs,k3d-nydus-cache-agent-1,2,1.572,1.000,10,fast

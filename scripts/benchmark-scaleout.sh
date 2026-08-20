@@ -11,11 +11,15 @@ set -euo pipefail
 # give registry traffic realistic latency, otherwise the local registry is
 # too fast for the configurations to differ.
 #
-# Usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile]
+# Usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile] [scale-target]
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG="${1:?usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile]}"
-REPS="${2:?usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile]}"
+CONFIG="${1:?usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile] [scale-target]}"
+REPS="${2:?usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile] [scale-target]}"
 OUTFILE="${3:-${REPO_ROOT}/analysis/results/benchmarks/scaleout-config${CONFIG}-$(date +%Y%m%dT%H%M%S).csv}"
+# Three replicas put one cold pod on each remaining node, which is the published
+# protocol. Two replicas start exactly one cold pod, so a cold start can be
+# measured without a second one competing for the same host
+SCALE_TARGET="${4:-3}"
 
 # Overridable so the same harness runs on AKS (cache at 10.0.0.50, reset via
 # cluster-reset-aks.sh) and locally with the defaults
@@ -201,13 +205,13 @@ for rep in $(seq 1 "${REPS}"); do
   hits_before="$(cache_metric cache_hits_total)"
   misses_before="$(cache_metric cache_misses_total)"
   start="$(date +%s.%N)"
-  apply_with_min_scale 3
+  apply_with_min_scale "${SCALE_TARGET}"
   scale_revision="$(revision_of_latest)"
   until [[ "${scale_revision}" != "${seed_revision}" && -n "${scale_revision}" ]]; do
     scale_revision="$(revision_of_latest)"
     sleep 0.2
   done
-  scale_ready="$(wait_pods_ready "${scale_revision}" 3 "${start}")"
+  scale_ready="$(wait_pods_ready "${scale_revision}" "${SCALE_TARGET}" "${start}")"
   hits_delta="$(awk -v a="$(cache_metric cache_hits_total)" -v b="${hits_before}" 'BEGIN{print a-b}')"
   misses_delta="$(awk -v a="$(cache_metric cache_misses_total)" -v b="${misses_before}" 'BEGIN{print a-b}')"
   while read -r pod ready; do

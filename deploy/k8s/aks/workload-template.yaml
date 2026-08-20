@@ -19,3 +19,8 @@ spec:
         - image: __ACR__/__SERVICE__:__TAG__
           ports:
             - containerPort: __PORT__
+          readinessProbe:
+            tcpSocket:
+              port: __PORT__
+            periodSeconds: 1
+            failureThreshold: 30

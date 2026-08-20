@@ -9,20 +9,30 @@ set -euo pipefail
 # already have a CSV are skipped, so an interrupted sweep resumes by
 # rerunning the script with the same environment.
 #
-# Configuration 1 is deliberately absent: the k3d nodes share one containerd
-# content store, so a true OCI cold start cannot be isolated locally; the
-# OCI distance behavior comes from the real cross-region anchors instead.
-# Usage: [RTTS=..] [RATE=..] [CONFIGS=..] [IMAGES=..] [REPS=..] benchmark-netem-sweep.sh
+# Configuration 1, eager OCI pulling, is supported alongside the nydus
+# configurations: the bandwidth campaign established that a true OCI cold
+# start can be isolated locally, so this driver renders the OCI tag and
+# checks the pull actually crossed the shaped link the same way the rate
+# sweep does.
+# Usage: [RTTS=..] [RATE=..] [CONFIGS=..] [IMAGES=..] [REPS=..] [PREFIX=..] benchmark-netem-sweep.sh
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RTTS="${RTTS:-0 10 25 50 80 100}"
 RATE="${RATE:-600mbit}"
 CONFIGS="${CONFIGS:-4 2}"
 IMAGES="${IMAGES:-fn-python-hello:8080 fn-python-ml:8080}"
 REPS="${REPS:-5}"
+PREFIX="${PREFIX:-netem-sweep}"
 REGISTRY="registry.localhost:5000"
 OUTDIR="${REPO_ROOT}/analysis/results/benchmarks"
 PROVENANCE="${OUTDIR}/netem-sweep-provenance.csv"
 SCRATCH="$(mktemp -d)"
+
+# A sweep that skips every cell has measured nothing, which is almost always
+# a stale results directory rather than a genuine resume. Counting the two
+# outcomes lets the run fail loudly at the end instead of printing "complete"
+# after three seconds
+CELLS_RUN=0
+CELLS_SKIPPED=0
 
 # Leave the registry unshaped whenever the sweep stops; the next invocation
 # re-arms the shaping for the point it resumes at
@@ -50,9 +60,78 @@ measured_connect() {
   curl -o /dev/null -s -m 15 -w '%{time_connect}' "http://${REGISTRY_IP}:5000/v2/"
 }
 
+# Only the nydus configurations read through the snapshotter, and switching to
+# configuration 1 deliberately stops it, so this cannot be part of the preflight
+# that runs before the first switch. The status is read into a variable rather
+# than piped into a quiet grep, which would close the pipe on the first match
+# and leave the reporting script killed by a broken pipe
+require_snapshotter() {
+  local status running
+  if ! status="$("${REPO_ROOT}/scripts/node-snapshotter.sh" status)"; then
+    echo "sweep: could not read the snapshotter status from the nodes" >&2
+    return 1
+  fi
+
+  running="$(grep -c "running" <<<"${status}")" || true
+  if [[ "${running}" != "3" ]]; then
+    echo "sweep: the nydus snapshotter runs on ${running} of 3 nodes" >&2
+    echo "${status}" >&2
+    return 1
+  fi
+}
+
+# What actually crosses the wire for an eager pull, measured from the registry
+# manifests. The thesis size ladder is uncompressed on-disk size and is roughly
+# four times larger, so it cannot be used to reason about transfer time
+compressed_layer_bytes() {
+  case "$1" in
+    fn-python-hello) echo 48738419 ;;
+    fn-java-springboot) echo 94041621 ;;
+    fn-pytorch-cpu) echo 267478092 ;;
+    *) echo "" ;;
+  esac
+}
+
+# Defence in depth for the configuration that has to pay the registry. The reset
+# gates coldness before the measurement; this re-checks it afterwards from the
+# measurement itself, because during development a run once produced warm pulls
+# while the reset's own gate reported clean and that was never explained. A pull
+# far below what the shaped link allows did not cross the wire, whatever the
+# reset believed. Pods that land back on the seed node are marked warm and are
+# legitimately near zero, so only the cold rows are held to the floor
+assert_cell_cold() {
+  local csv="$1" image="$2" configured_bps="$3" bytes floor violations
+  bytes="$(compressed_layer_bytes "${image}")"
+  if [[ -z "${bytes}" ]]; then
+    echo "sweep: no compressed layer size known for ${image}, so its cold rows cannot be checked" >&2
+    return 1
+  fi
+
+  floor="$(awk -v b="${bytes}" -v r="${configured_bps}" 'BEGIN { printf "%.3f", 0.6 * b / r }')"
+  violations="$(awk -F, -v floor="${floor}" \
+    'NR > 1 && $5 == "no" && $7 + 0 < floor { print "  rep " $2 " " $3 " " $4 " pull_seconds " $7 }' \
+    "${csv}")"
+  if [[ -n "${violations}" ]]; then
+    echo "sweep: cold rows below the ${floor}s floor for ${image}, so this cell is not cold:" >&2
+    echo "${violations}" >&2
+    mv "${csv}" "${csv%.csv}.failed-cold"
+    echo "sweep: kept the evidence at ${csv%.csv}.failed-cold" >&2
+    return 1
+  fi
+}
+
+# The netem sweep holds one rate for the whole run rather than sweeping it,
+# so the floor for the cold-pull assertion is computed once rather than per point
+CONFIGURED_BPS="$(awk -v r="${RATE%mbit}" 'BEGIN { printf "%.0f", r * 1000000 / 8 }')"
+
 for config in ${CONFIGS}; do
   echo "### sweep: switching to config ${config}"
   "${REPO_ROOT}/scripts/config-switch.sh" "${config}"
+
+  case "${config}" in
+    1) tag="oci" ;;
+    *) tag="nydus-none"; require_snapshotter ;;
+  esac
 
   for rtt in ${RTTS}; do
     "${REPO_ROOT}/scripts/registry-netem.sh" on "${rtt}ms" "${RATE}"
@@ -74,20 +153,26 @@ for config in ${CONFIGS}; do
       image="${entry%%:*}"
       port="${entry##*:}"
 
-      if ls "${OUTDIR}/netem-sweep-config${config}-${image}-rtt${rtt}ms-rate${RATE}-"*.csv >/dev/null 2>&1; then
+      if [[ -z "${FORCE:-}" ]] && ls "${OUTDIR}/${PREFIX}-config${config}-${image}-rtt${rtt}ms-rate${RATE}-"*.csv >/dev/null 2>&1; then
         echo "### sweep: skip config ${config} ${image} rtt ${rtt}ms (CSV exists)"
+        CELLS_SKIPPED=$((CELLS_SKIPPED + 1))
         continue
       fi
+      CELLS_RUN=$((CELLS_RUN + 1))
 
       workload="${SCRATCH}/workload-${config}-${image}.yaml"
-      ACR="${REGISTRY}" SERVICE="${image}" TAG="nydus-none" PORT="${port}" \
+      ACR="${REGISTRY}" SERVICE="${image}" TAG="${tag}" PORT="${port}" \
         "${REPO_ROOT}/scripts/render-workload.sh" >"${workload}"
 
       # A failed cell surrenders its CSV and the sweep moves on; the partial
       # file is set aside so a rerun repeats the whole cell
-      csv="${OUTDIR}/netem-sweep-config${config}-${image}-rtt${rtt}ms-rate${RATE}-$(date +%Y%m%dT%H%M%S).csv"
-      if ! SERVICE="${image}" WORKLOAD="${workload}" \
+      csv="${OUTDIR}/${PREFIX}-config${config}-${image}-rtt${rtt}ms-rate${RATE}-$(date +%Y%m%dT%H%M%S).csv"
+      if SERVICE="${image}" WORKLOAD="${workload}" \
           "${REPO_ROOT}/scripts/benchmark-scaleout.sh" "${config}" "${REPS}" "${csv}"; then
+        if [[ "${config}" == "1" && "${REPS}" != "0" ]]; then
+          assert_cell_cold "${csv}" "${image}" "${CONFIGURED_BPS}"
+        fi
+      else
         echo "### sweep: FAILED config ${config} ${image} rtt ${rtt}ms"
         [[ -f "${csv}" ]] && mv "${csv}" "${csv%.csv}.failed-partial"
         kubectl delete ksvc "${image}" --ignore-not-found --timeout=120s || true
@@ -96,4 +181,11 @@ for config in ${CONFIGS}; do
   done
 done
 
-echo "### sweep complete"
+if (( CELLS_RUN == 0 )); then
+  echo "### sweep measured nothing: all ${CELLS_SKIPPED} cells already had a CSV in ${OUTDIR}" >&2
+  echo "### results from a different machine living in that directory will do this" >&2
+  echo "### move them aside, or rerun with FORCE=1 to overwrite" >&2
+  exit 1
+fi
+
+echo "### sweep complete: ${CELLS_RUN} cells measured, ${CELLS_SKIPPED} skipped"

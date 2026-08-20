@@ -15,6 +15,12 @@ IMAGES=(
   "tensorflow-gpu" "pytorch-cuda"
 )
 
+# The default is the whole corpus; a campaign that needs four images says so
+# rather than paying for the rest
+if [[ -n "${CORPUS_IMAGES:-}" ]]; then
+  read -r -a IMAGES <<<"${CORPUS_IMAGES}"
+fi
+
 echo "Converting images to uncompressed Nydus format"
 for img in "${IMAGES[@]}"; do
   echo "Converting ${img} (compressor=none)..."

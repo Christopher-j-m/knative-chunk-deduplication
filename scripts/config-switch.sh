@@ -23,6 +23,10 @@ DROPIN=/var/lib/rancher/k3s/agent/etc/containerd/config.toml.d/nydus-global.toml
 
 place_global_dropin() {
   for node in "${AGENTS[@]}" "${SERVER}"; do
+    # a genuinely cold node has never had anything dropped into
+    # config.toml.d, so the directory does not exist yet and docker cp
+    # refuses to create a missing parent
+    docker exec "${node}" mkdir -p "$(dirname "${DROPIN}")"
     docker cp "${REPO_ROOT}/deploy/local/snapshotter/nydus-global.toml" "${node}:${DROPIN}"
   done
 }
