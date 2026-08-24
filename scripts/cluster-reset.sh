@@ -9,7 +9,11 @@ set -euo pipefail
 # configuration: the snapshotter is only restarted on nodes that carry the
 # nydus drop-in (configs 2 and 4)
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NODES=(k3d-nydus-cache-server-0 k3d-nydus-cache-agent-0 k3d-nydus-cache-agent-1)
+mapfile -t NODES < <("${REPO_ROOT}/scripts/cluster-nodes.sh")
+if [[ "${#NODES[@]}" -eq 0 ]]; then
+  echo "no cluster nodes found; is the k3d cluster running?" >&2
+  exit 1
+fi
 DROPIN=/var/lib/rancher/k3s/agent/etc/containerd/config.toml.d/nydus-global.toml
 CTR="ctr -a /run/k3s/containerd/containerd.sock -n k8s.io"
 SERVICE="${SERVICE:-fn-python-hello}"
@@ -493,6 +497,11 @@ verify_cold() {
     fi
   done
   if [[ -n "${problems}" ]]; then
+    # the caller decides whether this is the final word: a probe run during
+    # the grace period just reports back, only the last one gives up
+    if [[ "${1:-}" == "quiet" ]]; then
+      return 1
+    fi
     echo "cluster-reset did not reach a genuinely cold state:" >&2
     printf '%s' "${problems}" >&2
     exit 1
@@ -622,5 +631,22 @@ kubectl -n kube-system rollout restart ds/chunk-proxy
 kubectl -n kube-system rollout status ds/chunk-proxy --timeout=180s
 
 echo "Verifying every node actually reached a cold state"
-verify_cold
+# Containerd tears sandboxes down asynchronously, so the last corpus sandbox
+# can still be unwinding when the purge returns. A single look turns that lag
+# into a failed benchmark cell even though the node reaches a cold state a few
+# seconds later, so look again for up to a minute before believing it
+cold=""
+for attempt in $(seq 1 12); do
+  if verify_cold quiet; then
+    cold="yes"
+    break
+  fi
+  if [[ "${attempt}" = 1 ]]; then
+    echo "waiting for the last corpus sandbox to finish tearing down"
+  fi
+  sleep 5
+done
+
+# one final unquiet pass, which prints what is still wrong and exits
+[[ -n "${cold}" ]] || verify_cold
 echo "Reset complete"

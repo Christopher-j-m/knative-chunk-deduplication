@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -24,14 +25,20 @@ func main() {
 	imagesFlag := flag.String("images", "", "comma-separated image subset, default all images in the working-set file")
 	mapStrategy := flag.String("map", "volume", "app-to-image mapping strategy: volume or hash")
 	seedsFlag := flag.String("seeds", "1", "comma-separated seeds")
+	assignPath := flag.String("assign", "", "JSON file with an explicit app-to-image map, overriding -map and -seeds")
 	nodes := flag.Int("nodes", 3, "number of nodes")
 	keepAliveMs := flag.Int64("keepalive-ms", 60000, "pod keep-alive window in ms")
 	concurrency := flag.Int("concurrency", 100, "per-pod concurrency limit")
 	capacitiesFlag := flag.String("capacities", "0", "comma-separated cluster cache capacities in bytes, 0 means unbounded")
-	policiesFlag := flag.String("policies", "lru", "comma-separated eviction policies: lru,lru2,size,refcount")
+	policiesFlag := flag.String("policies", "lru", "comma-separated eviction policies: lru,lru2,size,refcount,gdsf")
 	outPath := flag.String("out", "", "output CSV path, stdout when empty")
 	timelineOut := flag.String("timeline-out", "", "write cumulative fetch totals over time to this CSV, single run only")
 	timelineBucketMs := flag.Int64("timeline-bucket-ms", 3600000, "timeline bucket width in ms")
+	latencyOut := flag.String("latency-out", "", "write per-run response-time quantiles to this CSV; enables the cost model")
+	warmFloorMs := flag.Int64("warm-floor-ms", 2050, "application startup floor in ms, from the measured warm cells")
+	registryChunkMs := flag.Float64("registry-chunk-ms", 22.56, "cost of one chunk fetched from the registry, in ms")
+	cacheChunkMs := flag.Float64("cache-chunk-ms", 1.84, "cost of one chunk served by the cluster cache, in ms")
+	noClusterCache := flag.Bool("no-cluster-cache", false, "model the uncached configuration: node-local caching only")
 	flag.Parse()
 
 	if *tracePath == "" {
@@ -44,6 +51,7 @@ func main() {
 		images:           *imagesFlag,
 		mapStrategy:      *mapStrategy,
 		seeds:            *seedsFlag,
+		assignPath:       *assignPath,
 		nodes:            *nodes,
 		keepAliveMs:      *keepAliveMs,
 		concurrency:      *concurrency,
@@ -52,9 +60,21 @@ func main() {
 		outPath:          *outPath,
 		timelineOut:      *timelineOut,
 		timelineBucketMs: *timelineBucketMs,
+		latencyOut:       *latencyOut,
+		warmFloorMs:      *warmFloorMs,
+		registryChunkMs:  *registryChunkMs,
+		cacheChunkMs:     *cacheChunkMs,
+		noClusterCache:   *noClusterCache,
 	}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// job is one run of the sweep: a capacity, a policy and a mapping seed
+type job struct {
+	seed     int64
+	capacity uint64
+	policy   string
 }
 
 type sweepOptions struct {
@@ -63,6 +83,7 @@ type sweepOptions struct {
 	images           string
 	mapStrategy      string
 	seeds            string
+	assignPath       string
 	nodes            int
 	keepAliveMs      int64
 	concurrency      int
@@ -71,6 +92,11 @@ type sweepOptions struct {
 	outPath          string
 	timelineOut      string
 	timelineBucketMs int64
+	latencyOut       string
+	warmFloorMs      int64
+	registryChunkMs  float64
+	cacheChunkMs     float64
+	noClusterCache   bool
 }
 
 // runSweep loads the inputs once and replays the trace for every combination
@@ -122,11 +148,6 @@ func runSweep(opts sweepOptions) error {
 
 	// enumerate every run up front so workers can chew through them in
 	// parallel while the output keeps a stable row order
-	type job struct {
-		seed     int64
-		capacity uint64
-		policy   string
-	}
 	var jobs []job
 	for _, seed := range seeds {
 		for _, capacity := range capacities {
@@ -144,6 +165,25 @@ func runSweep(opts sweepOptions) error {
 			return fmt.Errorf("failed to assign images: %w", err)
 		}
 		assignBySeed[seed] = assign
+	}
+
+	// a caller-supplied mapping replaces the generated ones outright, which
+	// also makes the seeds meaningless: every seed would run the same job
+	if opts.assignPath != "" {
+		fixed, err := readAssignment(opts.assignPath)
+		if err != nil {
+			return err
+		}
+		seeds = seeds[:1]
+		assignBySeed = map[int64]map[string]string{seeds[0]: fixed}
+
+		kept := jobs[:0]
+		for _, j := range jobs {
+			if j.seed == seeds[0] {
+				kept = append(kept, j)
+			}
+		}
+		jobs = kept
 	}
 
 	if opts.timelineOut != "" && len(jobs) != 1 {
@@ -177,11 +217,22 @@ func runSweep(opts sweepOptions) error {
 				}
 
 				cfg := sim.Config{
-					Nodes:         opts.nodes,
-					CapacityBytes: j.capacity,
-					KeepAliveMs:   opts.keepAliveMs,
-					Concurrency:   opts.concurrency,
-					Seed:          j.seed,
+					Nodes:          opts.nodes,
+					CapacityBytes:  j.capacity,
+					KeepAliveMs:    opts.keepAliveMs,
+					Concurrency:    opts.concurrency,
+					Seed:           j.seed,
+					NoClusterCache: opts.noClusterCache,
+				}
+				// the cost model is only built when the caller asks for
+				// response times, so every existing capacity run keeps its
+				// fetch-accounting-only behaviour
+				if opts.latencyOut != "" {
+					cfg.Cost = &sim.CostModel{
+						DefaultWarmFloorMs: opts.warmFloorMs,
+						RegistryChunkMs:    opts.registryChunkMs,
+						CacheChunkMs:       opts.cacheChunkMs,
+					}
 				}
 				if opts.timelineOut != "" {
 					cfg.TimelineBucketMs = opts.timelineBucketMs
@@ -207,6 +258,12 @@ func runSweep(opts sweepOptions) error {
 		}
 	}
 
+	if opts.latencyOut != "" {
+		if err := writeLatency(opts.latencyOut, traceName, opts, jobs, results); err != nil {
+			return err
+		}
+	}
+
 	if opts.timelineOut != "" {
 		if err := writeTimeline(opts.timelineOut, results[0].Timeline); err != nil {
 			return err
@@ -216,6 +273,73 @@ func runSweep(opts sweepOptions) error {
 }
 
 // writeTimeline dumps the hourly cumulative fetch totals of a single run
+// writeLatency reports what the replay did to the requester rather than to the
+// registry: one row per run with the response-time distribution over every
+// invocation in the trace, warm and cold alike.
+func writeLatency(path, trace string, opts sweepOptions, jobs []job, results []sim.Result) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("failed to create latency file: %w", err)
+	}
+	defer f.Close()
+
+	w := csv.NewWriter(f)
+	defer w.Flush()
+
+	header := []string{
+		"trace", "cluster_cache", "policy", "capacity_bytes", "nodes",
+		"invocations", "cold_starts", "warm_starts",
+		"p50_ms", "p95_ms", "p99_ms", "p999_ms", "p9999_ms", "max_ms",
+		"affected_share",
+	}
+	if err := w.Write(header); err != nil {
+		return fmt.Errorf("failed to write latency header: %w", err)
+	}
+
+	clusterCache := "yes"
+	if opts.noClusterCache {
+		clusterCache = "no"
+	}
+
+	for i, res := range results {
+		if res.Latency == nil {
+			continue
+		}
+
+		// an invocation is affected when it waited on a cold start rather than
+		// being served straight away. The share is small enough that the
+		// difference between configurations lives above the 99th percentile,
+		// which is why the deeper quantiles are reported alongside it
+		affected := 0.0
+		if res.Invocations > 0 {
+			affected = float64(res.ColdStarts) / float64(res.Invocations)
+		}
+
+		row := []string{
+			trace,
+			clusterCache,
+			jobs[i].policy,
+			strconv.FormatUint(jobs[i].capacity, 10),
+			strconv.Itoa(opts.nodes),
+			strconv.Itoa(res.Invocations),
+			strconv.Itoa(res.ColdStarts),
+			strconv.Itoa(res.WarmStarts),
+			strconv.FormatInt(res.Latency.Quantile(0.50), 10),
+			strconv.FormatInt(res.Latency.Quantile(0.95), 10),
+			strconv.FormatInt(res.Latency.Quantile(0.99), 10),
+			strconv.FormatInt(res.Latency.Quantile(0.999), 10),
+			strconv.FormatInt(res.Latency.Quantile(0.9999), 10),
+			strconv.FormatInt(res.Latency.Quantile(1.00), 10),
+			strconv.FormatFloat(affected, 'f', 6, 64),
+		}
+		if err := w.Write(row); err != nil {
+			return fmt.Errorf("failed to write latency row: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func writeTimeline(path string, points []sim.TimelinePoint) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -305,4 +429,21 @@ func parseInts(csvList string) ([]int64, error) {
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// Reads an explicit app-to-image mapping written as a flat JSON object.
+func readAssignment(path string) (map[string]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read assignment: %w", err)
+	}
+
+	fixed := map[string]string{}
+	if err := json.Unmarshal(raw, &fixed); err != nil {
+		return nil, fmt.Errorf("failed to parse assignment: %w", err)
+	}
+	if len(fixed) == 0 {
+		return nil, fmt.Errorf("assignment %s maps no apps", path)
+	}
+	return fixed, nil
 }

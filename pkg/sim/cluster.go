@@ -12,6 +12,17 @@ type Config struct {
 	Concurrency      int
 	Seed             int64
 	TimelineBucketMs int64
+
+	// With a cost model set, a cold-starting pod is unready until its startup
+	// has elapsed and arrivals queue behind it, which is what turns the fetch
+	// accounting into a response time. Leaving it nil keeps the original
+	// behaviour, so the capacity results stay reproducible.
+	Cost *CostModel
+
+	// NoClusterCache models the uncached configuration, which keeps Nydus's
+	// node-local chunk cache but has no cluster tier, so a chunk another node
+	// already fetched is of no use to this one.
+	NoClusterCache bool
 }
 
 // TimelinePoint is a running fetch total at the end of one time bucket
@@ -34,10 +45,19 @@ type Result struct {
 	Evictions       int
 	PeakStoredBytes uint64
 	Timeline        []TimelinePoint
+
+	// per-class chunk counts, which the cost model charges at different rates
+	LocalChunks    int
+	CacheChunks    int
+	RegistryChunks int
+
+	// response time of every invocation, recorded only with a cost model set
+	Latency *Latency
 }
 
 type pod struct {
 	node      int
+	readyAt   int64
 	busyUntil []int64
 	idleSince int64
 }
@@ -64,6 +84,12 @@ func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, 
 	stored := map[string]uint64{}
 	var storedBytes uint64
 	imageSeeded := map[string]bool{}
+
+	// two minutes covers every cold start the measured cells produce, and a
+	// slower one still reports at the ceiling rather than vanishing
+	if cfg.Cost != nil {
+		res.Latency = NewLatency(120000)
+	}
 
 	// close out a timeline bucket whenever simulated time crosses its edge
 	var bucketEnd int64
@@ -107,6 +133,10 @@ func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, 
 		alive := state.pods[:0]
 		for _, p := range state.pods {
 			p.reap(inv.AtMs)
+			if inv.AtMs < p.readyAt {
+				alive = append(alive, p)
+				continue
+			}
 			if len(p.busyUntil) == 0 && inv.AtMs-p.idleSince > cfg.KeepAliveMs {
 				podsPerNode[p.node]--
 				continue
@@ -115,10 +145,20 @@ func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, 
 		}
 		state.pods = alive
 
-		// warm path: any pod with a free slot takes the invocation
+		// warm path: any pod with a free slot takes the invocation. A pod that
+		// is still starting holds the request instead of serving it, which is
+		// what the platform's activator does, so the wait counts toward the
+		// requester's latency
 		if p := freeSlot(state.pods, cfg.Concurrency); p != nil {
-			p.busyUntil = append(p.busyUntil, inv.AtMs+inv.DurMs)
+			begin := inv.AtMs
+			if p.readyAt > begin {
+				begin = p.readyAt
+			}
+			p.busyUntil = append(p.busyUntil, begin+inv.DurMs)
 			res.WarmStarts++
+			if res.Latency != nil {
+				res.Latency.Observe(begin - inv.AtMs + inv.DurMs)
+			}
 			continue
 		}
 
@@ -130,7 +170,7 @@ func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, 
 			}
 		}
 		podsPerNode[node]++
-		newPod := &pod{node: node, busyUntil: []int64{inv.AtMs + inv.DurMs}}
+		newPod := &pod{node: node}
 		state.pods = append(state.pods, newPod)
 		res.ColdStarts++
 		if !imageSeeded[image] {
@@ -139,15 +179,20 @@ func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, 
 		}
 
 		// walk the working set and account for where each chunk comes from
+		var counts FetchCounts
 		for _, c := range ws.Chunks {
 			switch {
 			case nodeLocal[node][c.Hash]:
 				res.LocalBytes += c.Size
-			case stored[c.Hash] > 0:
+				counts.LocalChunks++
+			case !cfg.NoClusterCache && stored[c.Hash] > 0:
 				res.ClusterHitBytes += c.Size
+				counts.CacheChunks++
 				policy.OnHit(c.Hash)
 			default:
 				res.RegistryBytes += c.Size
+				counts.RegistryChunks++
+				counts.RegistryBytes += c.Size
 				stored[c.Hash] = c.Size
 				storedBytes += c.Size
 				policy.OnInsert(c.Hash, c.Size)
@@ -162,6 +207,21 @@ func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, 
 				}
 			}
 			nodeLocal[node][c.Hash] = true
+		}
+		res.LocalChunks += counts.LocalChunks
+		res.CacheChunks += counts.CacheChunks
+		res.RegistryChunks += counts.RegistryChunks
+
+		// the fetch accounting above is what the startup cost is charged on,
+		// so the pod's readiness can only be set once the walk is done
+		var startup int64
+		if cfg.Cost != nil {
+			startup = cfg.Cost.StartupMs(image, counts)
+		}
+		newPod.readyAt = inv.AtMs + startup
+		newPod.busyUntil = []int64{newPod.readyAt + inv.DurMs}
+		if res.Latency != nil {
+			res.Latency.Observe(startup + inv.DurMs)
 		}
 		if storedBytes > res.PeakStoredBytes {
 			res.PeakStoredBytes = storedBytes

@@ -168,6 +168,64 @@ def load_sweep_cell(config, image, rtt, rate="600mbit"):
     return pd.read_csv(files[-1])
 
 
+def load_ladder_cell(config, image, rtt, rate="600mbit"):
+    pattern = os.path.join(
+        BENCH, f"ladder-config{config}-{image}-rtt{rtt}ms-rate{rate}-*.csv"
+    )
+    files = sorted(glob.glob(pattern))
+    if not files:
+        return None
+    return pd.read_csv(files[-1])
+
+
+def ladder_by_config():
+    """Six-image ladder at both registry distances, one panel each."""
+    configs = (1, 2, 4)
+    width = 0.26
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.6))
+    for ax, rtt in zip(axes, (0, 80)):
+        for slot, config in enumerate(configs):
+            xs, means, err_low, err_high, warms = [], [], [], [], []
+            for index, (image, _) in enumerate(IMAGES):
+                frame = load_ladder_cell(config, image, rtt)
+                if frame is None:
+                    continue
+                mean, low, high = phase_stats(frame, "scaleout", "no")
+                warm_mean, _, _ = phase_stats(frame, "scaleout", "yes")
+                xs.append(index + (slot - (len(configs) - 1) / 2) * width)
+                means.append(mean)
+                err_low.append(mean - low)
+                err_high.append(high - mean)
+                warms.append(warm_mean)
+
+            ax.bar(xs, means, width=width * 0.92, color=CONFIG_COLORS[config],
+                   label=CONFIG_LABELS[config] if rtt == 0 else None, zorder=2)
+            ax.errorbar(xs, means, yerr=[err_low, err_high], fmt="none",
+                        ecolor="#444444", elinewidth=0.8, capsize=1.6, zorder=3)
+            # short black tick marking the matching warm floor on each bar
+            for x, warm in zip(xs, warms):
+                ax.plot([x - width * 0.42, x + width * 0.42], [warm, warm],
+                        color="black", linewidth=1.0, zorder=4)
+
+        ax.set_title(f"{rtt} ms registry round trip", fontsize=9)
+        ax.set_xticks(range(len(IMAGES)))
+        # the two panels leave each label about half the width the single-panel
+        # figure gives it, so they lean rather than collide
+        ax.set_xticklabels([label.replace("\n", " ") for label in
+                            (name for name, _ in IMAGES)],
+                           fontsize=7, rotation=30, ha="right")
+        ax.set_ylabel("Scale-out cold start (s)")
+
+    # a shared linear scale would flatten every bar in the left panel against
+    # the 82-second bar in the right one, so each distance keeps its own
+    axes[1].set_ylabel(None)
+    fig.legend(loc="upper center", ncol=3, fontsize=8, bbox_to_anchor=(0.5, 1.05))
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    fig.savefig(os.path.join(OUT, "eval_ladder_by_config.pdf"), bbox_inches="tight")
+    plt.close(fig)
+
+
 def sweep_stats(frame, warm):
     values = frame[(frame["phase"] == "scaleout") & (frame["warm"] == warm)]["ready_seconds"]
     return values.median(), values.min(), values.max()
@@ -502,15 +560,188 @@ def floor_decomposition():
     plt.close(fig)
 
 
+SIMULATION = os.path.join(
+    os.path.dirname(__file__),
+    "../../../analysis/results/simulation",
+)
+
+
+def node_scaling():
+    """Cold start against cluster size, for the two images swept.
+
+    A figure earns its place here because the finding is three different
+    shapes rather than three numbers: one line climbs with the node count, one
+    is flat, and one is nearly flat. The table keeps the pull times and the
+    ratios, which are read rather than seen.
+    """
+    images = [
+        ("fn-python-hello", "fn-python-hello", [2, 3, 5, 7]),
+        ("fn-python-ml", "fn-python-ml", [3, 7]),
+    ]
+    fig, axes = plt.subplots(1, 2, figsize=(6.6, 2.9), sharey=True)
+
+    for ax, (image, title, counts) in zip(axes, images):
+        for config in (1, 2, 4):
+            xs, ys = [], []
+            for n in counts:
+                frame = load_cell(f"node-sweep", config, f"{image}-n{n}-rtt80ms")
+                if frame is None:
+                    continue
+                cold = frame[(frame["phase"] == "scaleout") & (frame["warm"] == "no")]
+                if cold.empty:
+                    continue
+                xs.append(n)
+                ys.append(cold["ready_seconds"].mean())
+            if not xs:
+                continue
+            ax.plot(xs, ys, marker="o", markersize=5, linewidth=2,
+                    color=CONFIG_COLORS[config], label=CONFIG_LABELS[config])
+            # direct label at the right end, which also discharges the
+            # contrast warning on the lighter of the three hues
+            ax.annotate(f"config {config}", (xs[-1], ys[-1]),
+                        textcoords="offset points", xytext=(6, 0),
+                        fontsize=7, color="#333333", va="center")
+
+        ax.set_title(title, fontsize=9)
+        ax.set_xlabel("Nodes cold-starting together")
+        ax.set_xticks(counts)
+        ax.set_xlim(min(counts) - 0.4, max(counts) + 1.6)
+
+    axes[0].set_ylabel("Cold start (s)")
+    # a log scale is what makes three curves an order of magnitude apart
+    # readable in one panel; the minor ticks are silenced so the axis reads as
+    # seconds rather than as powers
+    axes[0].set_yscale("log")
+    axes[0].set_yticks([4, 6, 10, 20, 40])
+    axes[0].set_yticklabels(["4", "6", "10", "20", "40"])
+    axes[0].yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+
+    handles = [Line2D([], [], color=CONFIG_COLORS[c], linewidth=2, label=CONFIG_LABELS[c])
+               for c in (1, 2, 4)]
+    fig.legend(handles=handles, fontsize=7, ncol=3, loc="lower center",
+               bbox_to_anchor=(0.5, -0.06))
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "eval_node_scaling.pdf"), bbox_inches="tight")
+    plt.close(fig)
+
+
+def cache_ceiling():
+    """Throughput and tail latency of the cache pod against concurrency.
+
+    The point is a knee: throughput stops rising while the tail keeps
+    climbing. Two panels rather than two y-axes on one, because a dual-axis
+    plot invites the reader to compare two scales that do not share units.
+    """
+    path = os.path.join(SUMMARIES, "cache-saturation-summary.csv")
+    if not os.path.exists(path):
+        return
+    data = pd.read_csv(path)
+
+    sizes = sorted(data["chunk_size_bytes"].unique())
+    shades = {sizes[0]: "#0072b2", sizes[-1]: "#009e73"}
+
+    fig, axes = plt.subplots(1, 2, figsize=(6.6, 2.7))
+    for size in sizes:
+        series = data[data["chunk_size_bytes"] == size].sort_values("concurrency")
+        label = f"{size // 1024} KiB chunks"
+        axes[0].plot(series["concurrency"], series["requests_per_second"] / 1000,
+                     marker="o", markersize=4.5, linewidth=2,
+                     color=shades[size], label=label)
+        axes[1].plot(series["concurrency"], series["p99_ms"],
+                     marker="o", markersize=4.5, linewidth=2,
+                     color=shades[size], label=label)
+
+    for ax in axes:
+        ax.set_xscale("log", base=2)
+        ax.set_xlabel("Simultaneous requesters")
+        ax.set_xticks(sorted(data["concurrency"].unique()))
+        ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+        ax.tick_params(axis="x", labelsize=7)
+
+    axes[0].set_ylabel("Throughput (thousand chunk reads/s)")
+    axes[1].set_ylabel("99th percentile (ms)")
+    axes[1].set_yscale("log")
+    axes[1].get_yaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+
+    axes[0].legend(fontsize=7, loc="lower right")
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "eval_cache_ceiling.pdf"), bbox_inches="tight")
+    plt.close(fig)
+
+
+def invocation_latency():
+    """Response-time distribution over the replayed week, cached and not.
+
+    This is the one result that a table genuinely cannot carry: the finding is
+    *where* the two distributions start to separate, and a handful of quantile
+    columns cannot show a crossing point.
+    """
+    path = os.path.join(SIMULATION, "latency-replay.csv")
+    if not os.path.exists(path):
+        return
+    data = pd.read_csv(path)
+    churn = data[(data["catalog"] == "n100-e6") & (data["keepalive_ms"] == 60000)]
+    if churn.empty:
+        return
+
+    quantiles = [0.50, 0.95, 0.99, 0.999, 0.9999]
+    columns = ["p50_ms", "p95_ms", "p99_ms", "p999_ms", "p9999_ms"]
+    # plotted against the tail depth 1/(1-q), so each decade of rarity is one
+    # equal step and the divergence point is legible
+    depth = [1 / (1 - q) for q in quantiles]
+
+    styles = {"yes": ("#009e73", "with cluster cache"),
+              "no": ("#e69f00", "without cluster cache")}
+
+    fig, ax = plt.subplots(figsize=(4.6, 2.9))
+    # the two curves coincide over most of their length, which is the result;
+    # the uncached one is drawn wider underneath so it stays visible as a
+    # fringe rather than being hidden by the line on top of it
+    widths = {"no": 4.0, "yes": 2.0}
+    for flag in ("no", "yes"):
+        row = churn[churn["cluster_cache"] == flag]
+        if row.empty:
+            continue
+        color, label = styles[flag]
+        ax.plot(depth, [row.iloc[0][c] for c in columns], marker="o",
+                markersize=4.5, linewidth=widths[flag], color=color,
+                label=label, solid_capstyle="round")
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xticks(depth)
+    ax.set_xticklabels(["p50", "p95", "p99", "p99.9", "p99.99"], fontsize=7.5)
+    ax.set_xlabel("Quantile of invocation response time")
+    ax.set_ylabel("Response time (ms)")
+    ax.get_yaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+    ax.set_yticks([10, 100, 1000, 10000, 100000])
+
+    # the share of invocations that wait on a cold start at all, which is what
+    # keeps the two curves together until the far right
+    ax.axvline(1 / 0.000692, color="#999999", linewidth=1, linestyle=":")
+    ax.annotate("0.07 % of invocations\ncold-start", (1 / 0.000692, 20),
+                fontsize=6.5, color="#666666", ha="right",
+                textcoords="offset points", xytext=(-4, 0))
+
+    ax.legend(fontsize=7, loc="upper left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "eval_invocation_latency.pdf"), bbox_inches="tight")
+    plt.close(fig)
+
+
 # bandwidth_sweep is deliberately absent: the thesis no longer includes that
 # figure, and calling it here would only leave an unused file behind
 def main():
     cold_by_config()
+    ladder_by_config()
     distance_anchors()
     distance_sweep()
     crossimage_reuse()
     envelope()
     floor_decomposition()
+    node_scaling()
+    cache_ceiling()
+    invocation_latency()
     print("figures written to", OUT)
 
 

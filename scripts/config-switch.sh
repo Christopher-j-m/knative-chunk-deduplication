@@ -17,8 +17,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="${1:?usage: config-switch.sh <1|2|4>}"
 
-AGENTS=(k3d-nydus-cache-agent-0 k3d-nydus-cache-agent-1)
-SERVER=k3d-nydus-cache-server-0
+mapfile -t ALL_NODES < <("${REPO_ROOT}/scripts/cluster-nodes.sh")
+if [[ "${#ALL_NODES[@]}" -eq 0 ]]; then
+  echo "no cluster nodes found; is the k3d cluster running?" >&2
+  exit 1
+fi
+SERVER="${ALL_NODES[0]}"
+AGENTS=("${ALL_NODES[@]:1}")
 DROPIN=/var/lib/rancher/k3s/agent/etc/containerd/config.toml.d/nydus-global.toml
 
 place_global_dropin() {

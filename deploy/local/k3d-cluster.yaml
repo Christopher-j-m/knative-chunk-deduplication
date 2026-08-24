@@ -1,6 +1,8 @@
-# Local three-node k3d cluster. The bootstrap script
-# replaces __PWD__ with the absolute repo path before `k3d cluster create`,
-# because k3d volume sources must be absolute.
+# Local k3d cluster for the benchmark rig. The bootstrap script replaces
+# __PWD__ with the absolute repo path before `k3d cluster create`, because k3d
+# volume sources must be absolute, and __AGENTS__ with the agent count, which
+# the node-count sweep varies. Three nodes, one server and two agents, is the
+# published protocol; the sweep grows it to seven.
 #
 # RUN-TIME NOTE: confirm the in-cluster registry hostname after creation with
 # `k3d registry list`. k3d-created registries are reachable inside the cluster
@@ -12,7 +14,7 @@ kind: Simple
 metadata:
   name: nydus-cache
 servers: 1
-agents: 2
+agents: __AGENTS__
 registries:
   create:
     name: registry.localhost

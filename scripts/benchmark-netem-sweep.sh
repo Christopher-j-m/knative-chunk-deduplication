@@ -72,9 +72,15 @@ require_snapshotter() {
     return 1
   fi
 
+  local expected
+  expected="$("${REPO_ROOT}/scripts/cluster-nodes.sh" | grep -c . || true)"
+  if [[ "${expected}" == "0" ]]; then
+    echo "sweep: no cluster nodes found; is the k3d cluster running?" >&2
+    return 1
+  fi
   running="$(grep -c "running" <<<"${status}")" || true
-  if [[ "${running}" != "3" ]]; then
-    echo "sweep: the nydus snapshotter runs on ${running} of 3 nodes" >&2
+  if [[ "${running}" != "${expected}" ]]; then
+    echo "sweep: the nydus snapshotter runs on ${running} of ${expected} nodes" >&2
     echo "${status}" >&2
     return 1
   fi
@@ -84,12 +90,43 @@ require_snapshotter() {
 # manifests. The thesis size ladder is uncompressed on-disk size and is roughly
 # four times larger, so it cannot be used to reason about transfer time
 compressed_layer_bytes() {
-  case "$1" in
-    fn-python-hello) echo 48738419 ;;
-    fn-java-springboot) echo 94041621 ;;
-    fn-pytorch-cpu) echo 267478092 ;;
-    *) echo "" ;;
-  esac
+  local image="$1"
+
+  # asked of the registry rather than kept in a table here, because a table
+  # goes stale the moment the corpus is rebuilt and, worse, silently has no
+  # answer for an image nobody added to it -- which aborts the whole sweep
+  # on an image that measured perfectly well
+  python3 - "${REGISTRY}" "${image}" <<'PYEOF'
+import json
+import sys
+import urllib.request
+
+registry, image = sys.argv[1], sys.argv[2]
+accept = ",".join([
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+])
+
+
+def manifest(reference):
+    request = urllib.request.Request(
+        f"http://{registry}/v2/{image}/manifests/{reference}",
+        headers={"Accept": accept})
+    return json.load(urllib.request.urlopen(request, timeout=30))
+
+
+document = manifest("oci")
+if "manifests" in document:
+    amd64 = [entry for entry in document["manifests"]
+             if entry.get("platform", {}).get("architecture") == "amd64"]
+    if not amd64:
+        raise SystemExit(1)
+    document = manifest(amd64[0]["digest"])
+
+print(sum(layer["size"] for layer in document["layers"]))
+PYEOF
 }
 
 # Defence in depth for the configuration that has to pay the registry. The reset

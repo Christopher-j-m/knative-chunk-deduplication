@@ -24,6 +24,8 @@ func NewPolicy(name string, refCounts map[string]int) (Policy, error) {
 		return newLRU2Policy(), nil
 	case "size":
 		return newSizePolicy(), nil
+	case "gdsf":
+		return newGDSFPolicy(), nil
 	case "refcount":
 		return newRefCountPolicy(refCounts), nil
 	default:
@@ -229,6 +231,71 @@ func (p *refCountPolicy) Evict() (string, uint64, bool) {
 	if victimItem == nil {
 		return "", 0, false
 	}
+	delete(p.entries, victim)
+	return victim, victimItem.size, true
+}
+
+// gdsfPolicy is greedy-dual size-frequency: every chunk carries a priority of
+// clock plus frequency over size, so small chunks that keep being re-fetched
+// outlive large cold ones. The clock rises to each victim's priority, which
+// ages out credit a chunk earned long ago.
+type gdsfPolicy struct {
+	clock    float64
+	admitted int64
+	entries  map[string]*gdsfItem
+}
+
+type gdsfItem struct {
+	size     uint64
+	hits     float64
+	priority float64
+	// insertion order, so a tie does not leave the victim to map iteration
+	admitted int64
+}
+
+func newGDSFPolicy() *gdsfPolicy {
+	return &gdsfPolicy{entries: make(map[string]*gdsfItem)}
+}
+
+func (p *gdsfPolicy) Name() string { return "gdsf" }
+
+func (p *gdsfPolicy) OnInsert(hash string, size uint64) {
+	// a zero-size chunk would divide by zero and outrank everything
+	if size == 0 {
+		size = 1
+	}
+
+	p.admitted++
+	item := &gdsfItem{size: size, hits: 1, admitted: p.admitted}
+	item.priority = p.clock + item.hits/float64(item.size)
+	p.entries[hash] = item
+}
+
+func (p *gdsfPolicy) OnHit(hash string) {
+	item, ok := p.entries[hash]
+	if !ok {
+		return
+	}
+
+	item.hits++
+	item.priority = p.clock + item.hits/float64(item.size)
+}
+
+func (p *gdsfPolicy) Evict() (string, uint64, bool) {
+	var victim string
+	var victimItem *gdsfItem
+	for hash, item := range p.entries {
+		if victimItem == nil ||
+			item.priority < victimItem.priority ||
+			(item.priority == victimItem.priority && item.admitted < victimItem.admitted) {
+			victim, victimItem = hash, item
+		}
+	}
+	if victimItem == nil {
+		return "", 0, false
+	}
+
+	p.clock = victimItem.priority
 	delete(p.entries, victim)
 	return victim, victimItem.size, true
 }

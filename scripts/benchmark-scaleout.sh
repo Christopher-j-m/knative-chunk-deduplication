@@ -96,9 +96,16 @@ reset_probe_pod() {
   kubectl delete pod bench-probe --ignore-not-found --timeout=60s >/dev/null
 }
 
+# A cache that has been scaled away or killed answers nothing, and the
+# degradation experiments put it in exactly that state on purpose. The reading
+# is taken in two steps rather than one pipeline because pipefail would
+# otherwise turn an unreachable probe into a failed assignment and abort the
+# run, which is the one outcome these experiments must not produce: a missing
+# cache has to read as no traffic, not as a dead harness
 cache_metric() {
-  kubectl exec bench-probe -- curl -s --max-time 5 "http://${CACHE_IP}/metrics" 2>/dev/null \
-    | awk -v k="$1" '$1==k || index($1, k"{")==1 {v=$NF} END {print v+0}'
+  local raw
+  raw="$(kubectl exec bench-probe -- curl -s --max-time 5 "http://${CACHE_IP}/metrics" 2>/dev/null || true)"
+  awk -v k="$1" '$1==k || index($1, k"{")==1 {v=$NF} END {print v+0}' <<<"${raw}"
 }
 
 # Reads the kubelet's own pull duration for the function image out of the
@@ -198,6 +205,15 @@ for rep in $(seq 1 "${REPS}"); do
   misses_delta="$(awk -v a="$(cache_metric cache_misses_total)" -v b="${misses_before}" 'BEGIN{print a-b}')"
   echo "${CONFIG},${rep},seed,${seed_node},no,${seed_ready#* },$(pull_seconds "${seed_pod}"),${hits_delta},${misses_delta}" >>"${OUTFILE}"
   echo "  seed   node=${seed_node} ready=${seed_ready#* }s hits+=${hits_delta} misses+=${misses_delta}"
+
+  # A hook between the two phases lets a campaign disturb the cache once the
+  # seed has filled it and before the other nodes ask for it. That is the only
+  # moment at which the degradation experiments can take the cache away from a
+  # cold start that is about to depend on it
+  if [[ -n "${PRE_SCALEOUT_HOOK:-}" ]]; then
+    echo "  hook   ${PRE_SCALEOUT_HOOK}"
+    bash -c "${PRE_SCALEOUT_HOOK}" || echo "  hook   returned non-zero, continuing" >&2
+  fi
 
   # Scale-out phase: two more replicas land on the remaining nodes and
   # cold-start the same image; a pod returning to the seed node is marked

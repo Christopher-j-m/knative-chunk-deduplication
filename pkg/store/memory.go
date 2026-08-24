@@ -83,3 +83,15 @@ func (m *MemoryStore) ChunkCount() int {
 	defer m.mu.RUnlock()
 	return len(m.chunks)
 }
+
+// Chunks returns one entry per stored chunk together with its payload size.
+func (m *MemoryStore) Chunks() []ChunkInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	listing := make([]ChunkInfo, 0, len(m.chunks))
+	for hash, payload := range m.chunks {
+		listing = append(listing, ChunkInfo{Hash: hash, Bytes: uint64(len(payload))})
+	}
+	return listing
+}

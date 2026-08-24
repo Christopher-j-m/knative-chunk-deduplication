@@ -147,3 +147,16 @@ func (d *DiskStore) ChunkCount() int {
 	defer d.mu.RUnlock()
 	return len(d.sizes)
 }
+
+// Chunks returns one entry per stored chunk together with its payload size.
+// The sizes come from the in-memory index, so no files are read.
+func (d *DiskStore) Chunks() []ChunkInfo {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	listing := make([]ChunkInfo, 0, len(d.sizes))
+	for hash, size := range d.sizes {
+		listing = append(listing, ChunkInfo{Hash: hash, Bytes: size})
+	}
+	return listing
+}

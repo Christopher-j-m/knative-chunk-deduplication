@@ -32,3 +32,17 @@ type Store interface {
 	// ChunkCount reports the number of distinct chunks currently held
 	ChunkCount() int
 }
+
+// ChunkInfo names one stored chunk and the size of its payload.
+type ChunkInfo struct {
+	Hash  string `json:"hash"`
+	Bytes uint64 `json:"size"`
+}
+
+// Lister is implemented by stores that can enumerate what they hold.
+// It backs the debug listing used to capture which chunks a cold start
+// actually touched, and stays separate from Store so a backend that cannot
+// enumerate cheaply is not forced to.
+type Lister interface {
+	Chunks() []ChunkInfo
+}

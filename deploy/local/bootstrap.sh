@@ -11,10 +11,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLUSTER_DEF="${REPO_ROOT}/deploy/local/k3d-cluster.yaml"
 REGISTRY="localhost:5000"
+# One server plus this many agents, matching the default the rig bring-up uses
+AGENTS="${AGENTS:-2}"
 
 echo "Rendering cluster definition with repo path ${REPO_ROOT}"
 RENDERED="$(mktemp)"
-sed "s#__PWD__#${REPO_ROOT}#g" "${CLUSTER_DEF}" > "${RENDERED}"
+sed -e "s#__PWD__#${REPO_ROOT}#g" -e "s#__AGENTS__#${AGENTS}#g" \
+  "${CLUSTER_DEF}" > "${RENDERED}"
 
 echo "Recreating k3d cluster"
 k3d cluster delete nydus-cache >/dev/null 2>&1 || true

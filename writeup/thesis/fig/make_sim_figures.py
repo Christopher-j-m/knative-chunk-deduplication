@@ -25,12 +25,14 @@ POLICY_COLORS = {
     "lru2": "#56b4e9",
     "size": "#e69f00",
     "refcount": "#009e73",
+    "gdsf": "#d55e00",
 }
 POLICY_LABELS = {
     "lru": "LRU",
     "lru2": "LRU-2",
     "size": "Largest-first",
     "refcount": "Fewest-images",
+    "gdsf": "Size-frequency",
 }
 
 MAIN_TRACE = "ibm-7d-top200"
@@ -48,8 +50,53 @@ plt.rcParams.update({
 })
 
 
-def load_campaign():
-    return pd.read_csv(os.path.join(SIM, "sim-campaign.csv"))
+def load_campaign(name="sim-campaign.csv"):
+    return pd.read_csv(os.path.join(SIM, name))
+
+
+def fig_catalog_and_churn():
+    """How the ceiling responds to catalog dilution and to update size."""
+    churn = load_campaign("sim-churn.csv")
+    churn["images"] = churn.trace.str.extract(r"n(\d+)-").astype(int)
+    churn["epoch_h"] = churn.trace.str.extract(r"-e(\d+)").astype(int)
+    full = churn[churn.capacity_bytes == churn.groupby("trace").capacity_bytes.transform("max")]
+
+    delta = load_campaign("sim-churn-delta.csv")
+    delta["delta"] = delta.trace.str.extract(r"-d([0-9.]+)$").astype(float)
+    delta_full = delta[delta.capacity_bytes == delta.groupby("trace").capacity_bytes.transform("max")]
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.8))
+
+    # left: the ceiling against catalog size, one line per churn rate
+    for epoch, label in ((0, "no churn"), (12, "2 versions"), (6, "4 versions")):
+        rows = full[(full.epoch_h == epoch) & (full.policy == "lru")].sort_values("images")
+        axes[0].plot(rows.images, rows.cluster_hit_rate_bytes, marker="o",
+                     markersize=3.5, linewidth=1.4, label=label)
+    axes[0].set_xlabel("Images in the catalog")
+    axes[0].set_ylabel("Byte hit rate at full capacity")
+    axes[0].set_title("Catalog dilution", fontsize=9)
+    axes[0].legend(fontsize=7.5)
+
+    # right: the same ceiling against how much each update rewrites
+    rows = delta_full[delta_full.policy == "lru"].sort_values("delta")
+    axes[1].plot(rows.delta, rows.cluster_hit_rate_bytes, marker="s",
+                 markersize=3.5, linewidth=1.4, color="#d55e00")
+    static = full[(full.images == 100) & (full.epoch_h == 0) & (full.policy == "lru")]
+    axes[1].axhline(static.cluster_hit_rate_bytes.iloc[0], color="#888888",
+                    linewidth=0.8, linestyle="--")
+    axes[1].text(0.21, static.cluster_hit_rate_bytes.iloc[0] - 0.022,
+                 "same catalog, no churn", ha="left", fontsize=7, color="#555555")
+    axes[1].set_xlabel("Fraction of each image rewritten per update")
+    axes[1].set_title("Update size, 100 images, 4 versions", fontsize=9)
+
+    for ax in axes:
+        ax.axhline(2 / 3, color="#888888", linewidth=0.8, linestyle=":")
+        ax.set_ylim(0.35, 0.72)
+    axes[0].text(100, 2 / 3 + 0.008, "ceiling (N−1)/N", ha="right", fontsize=7, color="#555555")
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "sim_catalog_churn.pdf"), bbox_inches="tight")
+    plt.close(fig)
 
 
 def fig_hit_rate_vs_capacity(campaign):
@@ -111,6 +158,7 @@ def fig_registry_traffic_over_time():
 
 
 def main():
+    fig_catalog_and_churn()
     campaign = load_campaign()
     fig_hit_rate_vs_capacity(campaign)
     fig_registry_traffic_over_time()

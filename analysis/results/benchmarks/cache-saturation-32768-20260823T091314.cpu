@@ -1,0 +1,3 @@
+metric,before,after,delta
+process_cpu_seconds_total,139.09,299.17,160.080
+cache_hits_total,695254,2199965,1504711

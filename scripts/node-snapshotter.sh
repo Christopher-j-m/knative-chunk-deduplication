@@ -8,12 +8,21 @@ set -euo pipefail
 # its nydusd children, status reports process and socket per node.
 ACTION="${1:?usage: node-snapshotter.sh <install|start|stop|status> [node]}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ALL_NODES=(k3d-nydus-cache-server-0 k3d-nydus-cache-agent-0 k3d-nydus-cache-agent-1)
+mapfile -t ALL_NODES < <("${REPO_ROOT}/scripts/cluster-nodes.sh")
+if [[ "${#ALL_NODES[@]}" -eq 0 ]]; then
+  echo "no cluster nodes found; is the k3d cluster running?" >&2
+  exit 1
+fi
 if [[ -n "${2:-}" ]]; then
   NODES=("$2")
 else
   NODES=("${ALL_NODES[@]}")
 fi
+
+# Which filesystem prefetch mode the nodes are installed with. Every published
+# campaign uses "off"; the sensitivity campaign installs "all" to measure what
+# that choice costs the uncached baseline
+PREFETCH="${PREFETCH:-off}"
 
 BIN_DIR=/opt/nydus/bin
 SOCKET=/run/containerd-nydus/containerd-nydus-grpc.sock
@@ -29,6 +38,14 @@ kill_matching() {
   docker exec "$1" sh -c "ps | grep -v grep | grep $2 | awk '{print \$1}' | xargs kill 2>/dev/null || true"
 }
 
+# Only an install writes a config, so the other actions do not pay for the
+# render or fail on a prefetch mode they were never going to apply
+RENDERED_NYDUSD_CONFIG="$(mktemp)"
+trap 'rm -f "${RENDERED_NYDUSD_CONFIG}"' EXIT
+if [[ "${ACTION}" == "install" ]]; then
+  "${REPO_ROOT}/scripts/render-nydusd-config.sh" "${PREFETCH}" >"${RENDERED_NYDUSD_CONFIG}"
+fi
+
 for node in "${NODES[@]}"; do
   case "${ACTION}" in
     install)
@@ -37,8 +54,8 @@ for node in "${NODES[@]}"; do
         docker cp "${REPO_ROOT}/deploy/local/bin/${binary}" "${node}:${BIN_DIR}/${binary}"
       done
       docker cp "${REPO_ROOT}/deploy/local/snapshotter/config.toml" "${node}:/etc/nydus/config.toml"
-      docker cp "${REPO_ROOT}/deploy/local/snapshotter/nydusd-config.json" "${node}:/etc/nydus/nydusd-config.json"
-      echo "${node}: installed"
+      docker cp "${RENDERED_NYDUSD_CONFIG}" "${node}:/etc/nydus/nydusd-config.json"
+      echo "${node}: installed (prefetch ${PREFETCH})"
       ;;
     start)
       if daemon_running "${node}"; then

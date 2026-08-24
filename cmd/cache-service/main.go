@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"nydus-cluster-cache/pkg/cache"
@@ -27,7 +28,7 @@ func main() {
 		log.Fatalf("build store: %v", err)
 	}
 
-	registry := prometheus.NewRegistry()
+	registry := newRegistry()
 	metrics := cache.NewMetrics(registry)
 	c := cache.New(backing, cache.Options{
 		CapacityBytes: cfg.capacityBytes,
@@ -38,6 +39,12 @@ func main() {
 	mux.Handle("/", server.NewHandler(c))
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 
+	// the touched-set capture reads this; stores that cannot enumerate their
+	// contents simply do not get the route
+	if lister, ok := backing.(store.Lister); ok {
+		mux.Handle("/debug/chunks", server.NewChunkListHandler(lister))
+	}
+
 	httpServer := &http.Server{
 		Addr:              cfg.listenAddr,
 		Handler:           mux,
@@ -45,6 +52,19 @@ func main() {
 	}
 
 	runUntilSignal(httpServer)
+}
+
+// newRegistry builds the metrics registry the service publishes. The cache's
+// own counters are registered by the caller; the process and runtime
+// collectors are added here so a campaign can tell a saturated cache pod from
+// an idle one without reaching into the container.
+func newRegistry() *prometheus.Registry {
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		collectors.NewGoCollector(),
+	)
+	return registry
 }
 
 type config struct {

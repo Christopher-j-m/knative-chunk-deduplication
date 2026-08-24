@@ -9,13 +9,17 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLUSTER=nydus-cache
+# One server plus this many agents. The published campaigns all run three
+# nodes; the node-count sweep asks for six agents and cordons back down
+AGENTS="${AGENTS:-2}"
 KNATIVE_VERSION=knative-v1.22.1
 
 cd "${REPO_ROOT}"
 
 echo "== 1/8 creating the k3d cluster =="
 if ! k3d cluster list | grep -q "^${CLUSTER}"; then
-  sed "s|__PWD__|${REPO_ROOT}|g" deploy/local/k3d-cluster.yaml > /tmp/k3d-cluster.yaml
+  sed -e "s|__PWD__|${REPO_ROOT}|g" -e "s|__AGENTS__|${AGENTS}|g" \
+    deploy/local/k3d-cluster.yaml > /tmp/k3d-cluster.yaml
   k3d cluster create --config /tmp/k3d-cluster.yaml
 fi
 kubectl config use-context "k3d-${CLUSTER}"
@@ -47,16 +51,17 @@ echo "== 4/8 installing and starting the nydus snapshotter =="
 
 echo "== 5/8 loading the corpus into the local registry =="
 # The ACR that once held the corpus is gone, so the OCI tags come from the
-# host docker store and the nydus variants are rebuilt from them. Only the
-# images this campaign needs are loaded; converting the whole corpus costs
-# an hour and nothing here reads the rest
-for img in fn-python-hello fn-python-ml fn-java-springboot fn-pytorch-cpu; do
+# host docker store and the nydus variants are rebuilt from them. The default
+# list is the six-image ladder the cold-start comparison reports; narrow it
+# with CORPUS_IMAGES when a campaign only reads part of the corpus, because
+# every extra image costs a conversion pass
+CORPUS_IMAGES="${CORPUS_IMAGES:-fn-go-hello fn-python-hello fn-java-springboot fn-node-api fn-python-ml fn-pytorch-cpu}"
+for img in ${CORPUS_IMAGES}; do
   docker tag "localhost:5000/${img}:oci" "localhost:5000/${img}:latest"
   docker push "localhost:5000/${img}:oci"
   docker push "localhost:5000/${img}:latest"
 done
-CORPUS_IMAGES="fn-python-hello fn-python-ml fn-java-springboot fn-pytorch-cpu" \
-  "${REPO_ROOT}/scripts/convert-corpus-uncompressed.sh"
+CORPUS_IMAGES="${CORPUS_IMAGES}" "${REPO_ROOT}/scripts/convert-corpus-uncompressed.sh"
 
 echo "== 6/8 deploying the cache service and chunk proxy =="
 # applied as explicit files, not "kubectl apply -f deploy/k8s/": that
