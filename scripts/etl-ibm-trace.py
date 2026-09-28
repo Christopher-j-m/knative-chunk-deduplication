@@ -21,6 +21,7 @@ def parse_args():
     parser.add_argument("--week-file", required=True, help="path to one week_*.pickle")
     parser.add_argument("--days", type=float, default=7.0, help="window length in days from week start")
     parser.add_argument("--top", type=int, default=200, help="keep this many most-invoked apps")
+    parser.add_argument("--all", action="store_true", help="keep every app in the week, ignoring --top")
     parser.add_argument("--tail-sample", type=int, default=0, help="also sample this many long-tail apps")
     parser.add_argument("--seed", type=int, default=1, help="seed for the tail sample")
     parser.add_argument("--busiest-day", action="store_true", help="pick the single highest-traffic day instead of the window start")
@@ -68,7 +69,10 @@ def select_apps(week, args):
         return json.loads(Path(args.apps).read_text())
 
     by_volume = week.groupby("app")["NumEvents"].sum().sort_values(ascending=False)
-    selected = list(by_volume.head(args.top).index)
+    if args.all:
+        selected = list(by_volume.index)
+    else:
+        selected = list(by_volume.head(args.top).index)
 
     if args.tail_sample > 0:
         tail = by_volume.iloc[args.top:]

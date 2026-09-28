@@ -1,0 +1,9 @@
+{
+ "hits_before": 0,
+ "hits_after": 16199,
+ "misses_before": 0,
+ "misses_after": 8917,
+ "put_bytes_before": 0,
+ "put_bytes_after": 526987173,
+ "stored_bytes_after": 476238240
+}

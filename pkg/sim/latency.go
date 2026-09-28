@@ -15,8 +15,9 @@ type FetchCounts struct {
 // rather than chosen, so the model carries no constant that the evaluation
 // has not already reported.
 type CostModel struct {
-	// application startup, which no distribution strategy can remove
-	WarmFloorMs        map[string]int64
+	// application startup, which no distribution strategy can remove,
+	// indexed by image
+	WarmFloorMs        []int64
 	DefaultWarmFloorMs int64
 
 	// what one chunk costs when it comes from the registry, and when it comes
@@ -29,24 +30,35 @@ type CostModel struct {
 	Eager           bool
 	ConnectMs       int64
 	EagerBytesPerMs float64
-	EagerImageBytes map[string]uint64
+	EagerImageBytes []uint64
 }
 
-func (m CostModel) warmFloor(image string) int64 {
-	if floor, ok := m.WarmFloorMs[image]; ok {
-		return floor
+// warmFloor is the image's own startup floor, falling back to the default
+// for an image the measurements never covered
+func (m CostModel) warmFloor(image int32) int64 {
+	if image < 0 || int(image) >= len(m.WarmFloorMs) || m.WarmFloorMs[image] == 0 {
+		return m.DefaultWarmFloorMs
 	}
-	return m.DefaultWarmFloorMs
+	return m.WarmFloorMs[image]
+}
+
+// eagerBytes is the compressed size an eager pull has to move, or zero for
+// an image the measurements never covered
+func (m CostModel) eagerBytes(image int32) uint64 {
+	if image < 0 || int(image) >= len(m.EagerImageBytes) {
+		return 0
+	}
+	return m.EagerImageBytes[image]
 }
 
 // StartupMs is how long the pod takes before it can answer a request.
-func (m CostModel) StartupMs(image string, counts FetchCounts) int64 {
+func (m CostModel) StartupMs(image int32, counts FetchCounts) int64 {
 	total := m.warmFloor(image)
 
 	if m.Eager {
 		total += m.ConnectMs
 		if m.EagerBytesPerMs > 0 {
-			total += int64(float64(m.EagerImageBytes[image]) / m.EagerBytesPerMs)
+			total += int64(float64(m.eagerBytes(image)) / m.EagerBytesPerMs)
 		}
 		return total
 	}

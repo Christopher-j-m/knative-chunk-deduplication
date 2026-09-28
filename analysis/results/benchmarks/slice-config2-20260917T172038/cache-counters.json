@@ -1,0 +1,9 @@
+{
+ "hits_before": 0,
+ "hits_after": 0,
+ "misses_before": 0,
+ "misses_after": 0,
+ "put_bytes_before": 0,
+ "put_bytes_after": 0,
+ "stored_bytes_after": 0
+}

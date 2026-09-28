@@ -1,0 +1,147 @@
+{
+ "hour_of_week": 128,
+ "rate_cap_per_minute": 60,
+ "seed": 1,
+ "apps": {
+  "a0697": {
+   "class": 1,
+   "image": "fn-go-hello",
+   "weekly": 22,
+   "calls_in_hour": 1,
+   "dropped_by_rate_cap": 0
+  },
+  "a0677": {
+   "class": 1,
+   "image": "fn-python-hello",
+   "weekly": 29,
+   "calls_in_hour": 3,
+   "dropped_by_rate_cap": 0
+  },
+  "a0725": {
+   "class": 1,
+   "image": "fn-java-springboot",
+   "weekly": 14,
+   "calls_in_hour": 2,
+   "dropped_by_rate_cap": 0
+  },
+  "a0676": {
+   "class": 1,
+   "image": "fn-node-api",
+   "weekly": 30,
+   "calls_in_hour": 30,
+   "dropped_by_rate_cap": 0
+  },
+  "a0507": {
+   "class": 2,
+   "image": "fn-python-ml",
+   "weekly": 664,
+   "calls_in_hour": 6,
+   "dropped_by_rate_cap": 0
+  },
+  "a0581": {
+   "class": 2,
+   "image": "fn-pytorch-cpu",
+   "weekly": 205,
+   "calls_in_hour": 4,
+   "dropped_by_rate_cap": 0
+  },
+  "a0587": {
+   "class": 2,
+   "image": "fn-go-hello",
+   "weekly": 174,
+   "calls_in_hour": 22,
+   "dropped_by_rate_cap": 0
+  },
+  "a0500": {
+   "class": 2,
+   "image": "fn-python-hello",
+   "weekly": 736,
+   "calls_in_hour": 5,
+   "dropped_by_rate_cap": 0
+  },
+  "a0372": {
+   "class": 3,
+   "image": "fn-java-springboot",
+   "weekly": 2037,
+   "calls_in_hour": 5,
+   "dropped_by_rate_cap": 0
+  },
+  "a0307": {
+   "class": 3,
+   "image": "fn-node-api",
+   "weekly": 2842,
+   "calls_in_hour": 10,
+   "dropped_by_rate_cap": 0
+  },
+  "a0345": {
+   "class": 3,
+   "image": "fn-python-ml",
+   "weekly": 2336,
+   "calls_in_hour": 7,
+   "dropped_by_rate_cap": 0
+  },
+  "a0265": {
+   "class": 3,
+   "image": "fn-pytorch-cpu",
+   "weekly": 4193,
+   "calls_in_hour": 17,
+   "dropped_by_rate_cap": 0
+  },
+  "a0170": {
+   "class": 4,
+   "image": "fn-go-hello",
+   "weekly": 16086,
+   "calls_in_hour": 96,
+   "dropped_by_rate_cap": 0
+  },
+  "a0145": {
+   "class": 4,
+   "image": "fn-python-hello",
+   "weekly": 18102,
+   "calls_in_hour": 101,
+   "dropped_by_rate_cap": 0
+  },
+  "a0180": {
+   "class": 4,
+   "image": "fn-java-springboot",
+   "weekly": 14090,
+   "calls_in_hour": 84,
+   "dropped_by_rate_cap": 0
+  },
+  "a0181": {
+   "class": 4,
+   "image": "fn-node-api",
+   "weekly": 14089,
+   "calls_in_hour": 84,
+   "dropped_by_rate_cap": 0
+  },
+  "a0023": {
+   "class": 5,
+   "image": "fn-python-ml",
+   "weekly": 2012327,
+   "calls_in_hour": 3506,
+   "dropped_by_rate_cap": 24540
+  },
+  "a0078": {
+   "class": 5,
+   "image": "fn-pytorch-cpu",
+   "weekly": 110981,
+   "calls_in_hour": 1435,
+   "dropped_by_rate_cap": 0
+  },
+  "a0009": {
+   "class": 5,
+   "image": "fn-go-hello",
+   "weekly": 4776333,
+   "calls_in_hour": 3464,
+   "dropped_by_rate_cap": 55419
+  },
+  "a0036": {
+   "class": 5,
+   "image": "fn-python-hello",
+   "weekly": 718232,
+   "calls_in_hour": 2497,
+   "dropped_by_rate_cap": 2496
+  }
+ }
+}

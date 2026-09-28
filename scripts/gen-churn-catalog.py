@@ -11,6 +11,7 @@ catalog working sets.
 import argparse
 import hashlib
 import json
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -20,12 +21,13 @@ import pandas as pd
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--touched", required=True, help="chunks-live-touched.json")
-    parser.add_argument("--trace", required=True, help="canonical trace CSV to rewrite")
+    parser.add_argument("--trace", required=False, help="canonical trace CSV to rewrite")
     parser.add_argument("--images", type=int, required=True, help="catalog size")
     parser.add_argument("--epoch-hours", type=float, default=0, help="version epoch length; 0 disables churn")
     parser.add_argument("--delta", type=float, default=0.2, help="fraction of unique chunks rewritten per version")
     parser.add_argument("--rebase", type=float, default=0.2, help="fraction of shared base chunks a version rebases; 0 keeps the base frozen")
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--catalog-only", action="store_true", help="write working-sets.json only; no trace rewrite or assignment")
     return parser.parse_args()
 
 
@@ -113,6 +115,19 @@ def main():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    calibrated, shared = load_calibrated(args.touched)
+
+    # a catalog-only run skips the trace entirely, so a bigger catalog can be
+    # replayed against the original trace instead of a churned rewrite of it
+    if args.catalog_only:
+        catalog = build_catalog(calibrated, shared, args.images, 1, args.delta, args.rebase)
+        (out_dir / "working-sets.json").write_text(json.dumps(catalog))
+        print(f"catalog images={args.images} chunks={sum(len(image['chunks']) for image in catalog)}")
+        return
+
+    if not args.trace:
+        sys.exit("--trace is required unless --catalog-only is set")
+
     trace = pd.read_csv(args.trace)
     span_ms = trace["at_ms"].max() - trace["at_ms"].min()
     if args.epoch_hours > 0:
@@ -124,7 +139,6 @@ def main():
     else:
         epoch_count = 1
 
-    calibrated, shared = load_calibrated(args.touched)
     catalog = build_catalog(calibrated, shared, args.images, epoch_count, args.delta, args.rebase)
     (out_dir / "working-sets.json").write_text(json.dumps(catalog))
 

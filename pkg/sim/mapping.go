@@ -6,40 +6,36 @@ import (
 	"sort"
 )
 
-// AssignImages maps every distinct app in the trace to one image id. The
+// AssignImages maps every app id in the trace to one image index. The
 // trace does not say which image an app runs, so this mapping is a modeling
 // choice; the study reports results across strategies and seeds to show the
 // conclusions do not hinge on it.
-func AssignImages(invs []Invocation, images []string, strategy string, seed int64) (map[string]string, error) {
+func AssignImages(trace *Trace, images []int32, strategy string, seed int64) ([]int32, error) {
 	if len(images) == 0 {
 		return nil, fmt.Errorf("no images to assign")
 	}
 
-	counts := make(map[string]int)
-	for _, inv := range invs {
-		counts[inv.App]++
+	apps := make([]int32, len(trace.Apps))
+	for i := range apps {
+		apps[i] = int32(i)
 	}
 
-	apps := make([]string, 0, len(counts))
-	for app := range counts {
-		apps = append(apps, app)
-	}
-
-	assign := make(map[string]string, len(apps))
+	assign := make([]int32, len(apps))
 	switch strategy {
 	case "volume":
-		// most-invoked apps first, alphabetical tie-break keeps runs reproducible
-		sort.Slice(apps, func(i, j int) bool {
-			if counts[apps[i]] != counts[apps[j]] {
-				return counts[apps[i]] > counts[apps[j]]
+		// most-invoked apps first, name tie-break keeps runs reproducible
+		sort.SliceStable(apps, func(i, j int) bool {
+			ci, cj := trace.Counts[apps[i]], trace.Counts[apps[j]]
+			if ci != cj {
+				return ci > cj
 			}
-			return apps[i] < apps[j]
+			return trace.Apps[apps[i]] < trace.Apps[apps[j]]
 		})
-		for i, app := range apps {
-			assign[app] = images[i%len(images)]
+		for rank, app := range apps {
+			assign[app] = images[rank%len(images)]
 		}
 	case "hash":
-		sort.Strings(apps)
+		sort.Slice(apps, func(i, j int) bool { return trace.Apps[apps[i]] < trace.Apps[apps[j]] })
 		rng := rand.New(rand.NewSource(seed))
 		for _, app := range apps {
 			assign[app] = images[rng.Intn(len(images))]

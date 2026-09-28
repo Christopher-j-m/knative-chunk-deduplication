@@ -13,15 +13,18 @@ type Config struct {
 	Seed             int64
 	TimelineBucketMs int64
 
+	// which node a cold-starting pod lands on; empty means packed
+	Placement string
+
 	// With a cost model set, a cold-starting pod is unready until its startup
 	// has elapsed and arrivals queue behind it, which is what turns the fetch
-	// accounting into a response time. Leaving it nil keeps the original
-	// behaviour, so the capacity results stay reproducible.
+	// accounting into a response time. Leaving it nil keeps the fetch
+	// accounting reproducible without one
 	Cost *CostModel
 
 	// NoClusterCache models the uncached configuration, which keeps Nydus's
 	// node-local chunk cache but has no cluster tier, so a chunk another node
-	// already fetched is of no use to this one.
+	// already fetched is of no use to this one
 	NoClusterCache bool
 }
 
@@ -31,6 +34,23 @@ type TimelinePoint struct {
 	RegistryBytes   uint64
 	ClusterHitBytes uint64
 	LocalBytes      uint64
+}
+
+// ClassStats is the accounting for every app in one invocation-frequency
+// class, which is how the study separates what the cache does for rarely
+// invoked functions from what it does for busy ones.
+type ClassStats struct {
+	Apps          int
+	Invocations   int
+	ColdStarts    int
+	LocalBytes    uint64
+	CacheBytes    uint64
+	RegistryBytes uint64
+
+	// startup delay of every cold start and response time of every
+	// invocation in the class, recorded only with a cost model set
+	ColdLatency *Latency
+	Response    *Latency
 }
 
 // Result aggregates what one replay run observed.
@@ -51,9 +71,24 @@ type Result struct {
 	CacheChunks    int
 	RegistryChunks int
 
-	// response time of every invocation, recorded only with a cost model set
-	Latency *Latency
+	// how many nodes ever hosted a pod, which shows where packed placement
+	// stops using the cluster
+	NodesUsed int
+
+	// the most chunk requests the cluster cache saw in one simulated second,
+	// to be read against the measured serving ceiling
+	PeakCacheRPS int
+
+	// response time of every invocation and startup delay of every cold
+	// start, recorded only with a cost model set
+	Latency     *Latency
+	ColdLatency *Latency
+
+	Classes [ClassCount]ClassStats
 }
+
+// RegistryRequests is how many chunk fetches reached the registry.
+func (r Result) RegistryRequests() int { return r.RegistryChunks }
 
 type pod struct {
 	node      int
@@ -66,35 +101,63 @@ type appState struct {
 	pods []*pod
 }
 
+// latencyCeilingMs is two minutes, which covers every cold start the
+// measured cells produce; a slower one reports at the ceiling
+const latencyCeilingMs = 120000
+
 // Simulate replays the invocations against a modeled cluster and returns the
 // aggregate fetch accounting. It is single-threaded and deterministic.
-func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, invs []Invocation, policy Policy) (Result, error) {
+func Simulate(cfg Config, catalog *Catalog, assign []int32, trace *Trace, policy Policy) (Result, error) {
 	if cfg.Nodes < 1 || cfg.Concurrency < 1 {
 		return Result{}, fmt.Errorf("config needs at least one node and slot")
 	}
-
-	var res Result
-	apps := map[string]*appState{}
-	nodeLocal := make([]map[string]bool, cfg.Nodes)
-	podsPerNode := make([]int, cfg.Nodes)
-	for i := range nodeLocal {
-		nodeLocal[i] = map[string]bool{}
+	if len(assign) != len(trace.Apps) {
+		return Result{}, fmt.Errorf("assignment covers %d apps, trace has %d", len(assign), len(trace.Apps))
+	}
+	for app, image := range assign {
+		if image < 0 || int(image) >= len(catalog.Sets) {
+			return Result{}, fmt.Errorf("app %s assigned to image %d, catalog has %d", trace.Apps[app], image, len(catalog.Sets))
+		}
+	}
+	placementName := cfg.Placement
+	if placementName == "" {
+		placementName = "packed"
+	}
+	placement, err := NewPlacement(placementName, cfg.Seed)
+	if err != nil {
+		return Result{}, err
 	}
 
-	stored := map[string]uint64{}
-	var storedBytes uint64
-	imageSeeded := map[string]bool{}
+	var res Result
+	apps := make([]*appState, len(trace.Apps))
+	classOf := make([]int, len(trace.Apps))
+	for app, count := range trace.Counts {
+		classOf[app] = ClassOf(count)
+		res.Classes[classOf[app]].Apps++
+	}
 
-	// two minutes covers every cold start the measured cells produce, and a
-	// slower one still reports at the ceiling rather than vanishing
+	// node-local sets are allocated the first time a node hosts a pod, so a
+	// large cluster that packed placement never reaches costs nothing
+	nodeLocal := make([]bitset, cfg.Nodes)
+	podsPerNode := make([]int, cfg.Nodes)
+
+	stored := make([]bool, len(catalog.Sizes))
+	var storedBytes uint64
+	imageSeeded := make([]bool, len(catalog.Sets))
+
 	if cfg.Cost != nil {
-		res.Latency = NewLatency(120000)
+		res.Latency = NewLatency(latencyCeilingMs)
+		res.ColdLatency = NewLatency(latencyCeilingMs)
+		for c := range res.Classes {
+			res.Classes[c].ColdLatency = NewLatency(latencyCeilingMs)
+			res.Classes[c].Response = NewLatency(latencyCeilingMs)
+		}
 	}
 
 	// close out a timeline bucket whenever simulated time crosses its edge
 	var bucketEnd int64
-	if cfg.TimelineBucketMs > 0 && len(invs) > 0 {
-		bucketEnd = invs[0].AtMs + cfg.TimelineBucketMs
+	if cfg.TimelineBucketMs > 0 && len(trace.Invocations) > 0 {
+		bucketEnd = trace.Invocations[0].AtMs + cfg.TimelineBucketMs
 	}
 	snapshot := func(at int64) {
 		res.Timeline = append(res.Timeline, TimelinePoint{
@@ -105,7 +168,30 @@ func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, 
 		})
 	}
 
-	for _, inv := range invs {
+	// cache requests are counted per simulated second; the trace is sorted,
+	// so one running bucket is enough to find the peak
+	var rpsSecond int64 = -1
+	rpsCount := 0
+	countCacheRequests := func(at int64, n int) {
+		second := at / 1000
+		if second != rpsSecond {
+			if rpsCount > res.PeakCacheRPS {
+				res.PeakCacheRPS = rpsCount
+			}
+			rpsSecond, rpsCount = second, 0
+		}
+		rpsCount += n
+	}
+
+	observe := func(class int, response int64) {
+		if res.Latency == nil {
+			return
+		}
+		res.Latency.Observe(response)
+		res.Classes[class].Response.Observe(response)
+	}
+
+	for _, inv := range trace.Invocations {
 		if cfg.TimelineBucketMs > 0 {
 			for inv.AtMs >= bucketEnd {
 				snapshot(bucketEnd)
@@ -113,15 +199,10 @@ func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, 
 			}
 		}
 		res.Invocations++
-
-		image, ok := assign[inv.App]
-		if !ok {
-			return Result{}, fmt.Errorf("app %s has no image assignment", inv.App)
-		}
-		ws, ok := sets[image]
-		if !ok {
-			return Result{}, fmt.Errorf("image %s has no working set", image)
-		}
+		class := classOf[inv.App]
+		res.Classes[class].Invocations++
+		image := assign[inv.App]
+		dur := int64(inv.DurMs)
 
 		state := apps[inv.App]
 		if state == nil {
@@ -154,25 +235,23 @@ func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, 
 			if p.readyAt > begin {
 				begin = p.readyAt
 			}
-			p.busyUntil = append(p.busyUntil, begin+inv.DurMs)
+			p.busyUntil = append(p.busyUntil, begin+dur)
 			res.WarmStarts++
-			if res.Latency != nil {
-				res.Latency.Observe(begin - inv.AtMs + inv.DurMs)
-			}
+			observe(class, begin-inv.AtMs+dur)
 			continue
 		}
 
-		// cold path: place a new pod on the emptiest node
-		node := 0
-		for n := 1; n < cfg.Nodes; n++ {
-			if podsPerNode[n] < podsPerNode[node] {
-				node = n
-			}
+		// cold path: place a new pod
+		node := placement.Place(podsPerNode)
+		if nodeLocal[node] == nil {
+			nodeLocal[node] = newBitset(len(catalog.Sizes))
+			res.NodesUsed++
 		}
 		podsPerNode[node]++
 		newPod := &pod{node: node}
 		state.pods = append(state.pods, newPod)
 		res.ColdStarts++
+		res.Classes[class].ColdStarts++
 		if !imageSeeded[image] {
 			imageSeeded[image] = true
 			res.SeedColdStarts++
@@ -180,54 +259,64 @@ func Simulate(cfg Config, sets map[string]WorkingSet, assign map[string]string, 
 
 		// walk the working set and account for where each chunk comes from
 		var counts FetchCounts
-		for _, c := range ws.Chunks {
+		local := nodeLocal[node]
+		stats := &res.Classes[class]
+		for _, id := range catalog.Sets[image] {
+			size := catalog.Sizes[id]
 			switch {
-			case nodeLocal[node][c.Hash]:
-				res.LocalBytes += c.Size
+			case local.has(id):
+				res.LocalBytes += size
+				stats.LocalBytes += size
 				counts.LocalChunks++
-			case !cfg.NoClusterCache && stored[c.Hash] > 0:
-				res.ClusterHitBytes += c.Size
+			case !cfg.NoClusterCache && stored[id]:
+				res.ClusterHitBytes += size
+				stats.CacheBytes += size
 				counts.CacheChunks++
-				policy.OnHit(c.Hash)
+				policy.OnHit(id)
 			default:
-				res.RegistryBytes += c.Size
+				res.RegistryBytes += size
+				stats.RegistryBytes += size
 				counts.RegistryChunks++
-				counts.RegistryBytes += c.Size
-				stored[c.Hash] = c.Size
-				storedBytes += c.Size
-				policy.OnInsert(c.Hash, c.Size)
+				counts.RegistryBytes += size
+				stored[id] = true
+				storedBytes += size
+				policy.OnInsert(id, size)
 				for cfg.CapacityBytes > 0 && storedBytes > cfg.CapacityBytes {
-					victim, size, ok := policy.Evict()
+					victim, victimSize, ok := policy.Evict()
 					if !ok {
 						break
 					}
-					delete(stored, victim)
-					storedBytes -= size
+					stored[victim] = false
+					storedBytes -= victimSize
 					res.Evictions++
 				}
 			}
-			nodeLocal[node][c.Hash] = true
+			local.set(id)
 		}
 		res.LocalChunks += counts.LocalChunks
 		res.CacheChunks += counts.CacheChunks
 		res.RegistryChunks += counts.RegistryChunks
+		countCacheRequests(inv.AtMs, counts.CacheChunks)
 
 		// the fetch accounting above is what the startup cost is charged on,
 		// so the pod's readiness can only be set once the walk is done
 		var startup int64
 		if cfg.Cost != nil {
 			startup = cfg.Cost.StartupMs(image, counts)
+			res.ColdLatency.Observe(startup)
+			stats.ColdLatency.Observe(startup)
 		}
 		newPod.readyAt = inv.AtMs + startup
-		newPod.busyUntil = []int64{newPod.readyAt + inv.DurMs}
-		if res.Latency != nil {
-			res.Latency.Observe(startup + inv.DurMs)
-		}
+		newPod.busyUntil = []int64{newPod.readyAt + dur}
+		observe(class, startup+dur)
 		if storedBytes > res.PeakStoredBytes {
 			res.PeakStoredBytes = storedBytes
 		}
 	}
-	if cfg.TimelineBucketMs > 0 && len(invs) > 0 {
+	if rpsCount > res.PeakCacheRPS {
+		res.PeakCacheRPS = rpsCount
+	}
+	if cfg.TimelineBucketMs > 0 && len(trace.Invocations) > 0 {
 		snapshot(bucketEnd)
 	}
 	return res, nil
