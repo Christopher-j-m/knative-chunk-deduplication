@@ -1,11 +1,4 @@
-# Configurations 2 and 4 workload: uncompressed-Nydus image, lazy-pulled through
-# the nydus snapshotter, which scripts/config-switch.sh makes the cluster-wide
-# containerd default for these configurations. The cache vs no-cache difference
-# is the chunk-proxy --cache-enabled toggle, not this manifest.
-#
-# RUN-TIME NOTE: confirm the Nydus image tag produced by
-# scripts/convert-corpus-uncompressed.sh (assumed ":nydus-none" here) and update
-# it if the conversion uses a different tag.
+# Test image that starts after deployment for lazy pulling
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:

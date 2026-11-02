@@ -11,271 +11,261 @@ import (
 )
 
 const (
-	// The text nydus-image emits at the end of each command, used as a marker when reading output of the command to see when it terminated
-	replPrompt = "Inspecting RAFS :> "
+	// cli text that nydus shows when waiting for the next command
+	nydusReadyMarker = "Inspecting RAFS :> "
 
-	// Limit on how much output the prompt reader may buffer before giving up and assuming an error happened
+	// Stop after a certain amount of output from nydus before assuming failure...
 	maxPromptReadBytes = 1 << 20 // 1 MiB
 )
 
-// Holds the metadata fields needed from each blob in a Nydus bootstrap.
-// Used to resolve numeric blob indices in chunk records to their content digests.
+// Blob metadata returned from nydus-image inspect cmd
 type blobMeta struct {
-	Index              int
-	BlobID             string
-	CompressedDataSize uint64
-	ChunkCount         int
+	Index  int    // Index
+	BlobID string // Hash (named Blob Id in output, so we just try being consistent)
 }
 
 // Reads all unique chunks from a Nydus bootstrap by first loading the blob table,
 // then streaming the full chunk dump from nydus-image. Chunks are deduplicated by content hash,
 // keeping first-seen order.
 func ExtractChunks(ctx context.Context, bootstrapPath string, imageName string) (*ImageChunks, error) {
+
+	// Load the blob table from the bootstrap file
 	blobs, err := loadBlobTable(ctx, bootstrapPath)
 	if err != nil {
-		return nil, fmt.Errorf("error loading the blob table: %w", err)
+		return nil, fmt.Errorf("error while loading the blob table via bootstrap manifest file: %w", err)
 	}
 
-	// Stream the full chunk dump and parse each record against the blob table
+	// RUn the nydus-image check cmd to get all the chunks
 	checkCmd := exec.CommandContext(ctx, "nydus-image", "check", "-B", bootstrapPath, "-v")
 	stdoutPipe, err := checkCmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("error opening check stdout pipe: %w", err)
+		return nil, fmt.Errorf("error occurred while opening the check stdout pipe: %w", err)
 	}
-	checkCmd.Stderr = io.Discard
+	checkCmd.Stderr = io.Discard // We dont need stderr output for parsind the chunk metadata
 
 	if err := checkCmd.Start(); err != nil {
-		return nil, fmt.Errorf("Error during starting the nydus-image check: %w", err)
+		return nil, fmt.Errorf("error running the nydus-image check cmd: %w", err)
 	}
 
+	// Parse the output of the check command to extract the chunk list
 	chunks, err := parseCheckDump(stdoutPipe, blobs, imageName)
 	if err != nil {
 		_ = checkCmd.Wait()
-		return nil, fmt.Errorf("parse check dump: %w", err)
+		return nil, fmt.Errorf("error during parsing of the check cmd output: %w", err)
 	}
 
 	if err := checkCmd.Wait(); err != nil {
-		return nil, fmt.Errorf("nydus-image check exited: %w", err)
+		return nil, fmt.Errorf("error during exiting the nydus-image check: %w", err)
 	}
 
-	ic := &ImageChunks{
+	allImageChunks := &ImageChunks{
 		Image:  imageName,
 		Chunks: chunks,
 	}
-	ic.TotalBytes = ic.TotalSize()
-	return ic, nil
+	allImageChunks.TotalBytes = allImageChunks.TotalSize()
+	return allImageChunks, nil
 }
 
-// Queries nydus-image for the bootstrap's blob table and returns one entry per blob.
-// The tool is driven interactively via stdin because it does not expose a non-interactive listing mode.
+// For a given bootstrap metadata file, this function runs nydus-image inspect to retrieve the blob metadata
+// => There is no non-interactive way to get the blobs from the bootstrap file apparently rn...
 func loadBlobTable(ctx context.Context, bootstrapPath string) ([]blobMeta, error) {
-	procCtx, killProc := context.WithCancel(ctx)
-	defer killProc()
+	processCtx, killProcess := context.WithCancel(ctx)
+	defer killProcess()
 
-	inspectCmd := exec.CommandContext(procCtx, "nydus-image", "inspect", bootstrapPath)
-
+	// Start nydus-image inspect in interactive mode and start reading its output
+	inspectCmd := exec.CommandContext(processCtx, "nydus-image", "inspect", bootstrapPath)
 	stdinPipe, err := inspectCmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("open inspect stdin pipe: %w", err)
+		return nil, fmt.Errorf("error occurred while trying to open inspect stdin pipe: %w", err)
 	}
 
 	defer stdinPipe.Close() //nolint:errcheck
 	stdoutPipe, err := inspectCmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("open inspect stdout pipe: %w", err)
+		return nil, fmt.Errorf("error while trying to open inspect stdout pipe: %w", err)
 	}
 
+	// We dont need stderr output for parsing the blob metadata... hence we discard it
 	inspectCmd.Stderr = io.Discard
 
+	// Run the inspect command
 	if err := inspectCmd.Start(); err != nil {
-		return nil, fmt.Errorf("start nydus-image inspect: %w", err)
+		return nil, fmt.Errorf("Running cmd: nydus-image inspect: %w", err)
 	}
 
-	r := bufio.NewReader(stdoutPipe)
-
-	if _, err := readUntilPrompt(r); err != nil {
-		return nil, fmt.Errorf("wait for initial inspect prompt: %w", err)
+	// Read the output of the last inspect command until we get the prompt
+	nydusOutputReader := bufio.NewReader(stdoutPipe)
+	if _, err := readUntilPrompt(nydusOutputReader); err != nil {
+		return nil, fmt.Errorf("error occurred while waiting for the inspect prompt: %w", err)
 	}
 
+	// Send the "blobs" command as followup and wait for the subsequent prompt again...
 	if _, err := io.WriteString(stdinPipe, "blobs\n"); err != nil {
-		return nil, fmt.Errorf("write blobs command: %w", err)
+		return nil, fmt.Errorf("error occurred while responding to prompt with blobs command: %w", err)
 	}
-	blobsText, err := readUntilPrompt(r)
+	blobsText, err := readUntilPrompt(nydusOutputReader)
 	if err != nil {
-		return nil, fmt.Errorf("wait for blobs response: %w", err)
+		return nil, fmt.Errorf("error occurred while waiting for the blobs command response: %w", err)
 	}
 
+	// Parse the blobs output into the blobMeta form
 	blobs, err := parseBlobsTable(blobsText)
 	if err != nil {
-		return nil, fmt.Errorf("parse blobs response: %w", err)
+		return nil, fmt.Errorf("error occurred while parsing the blobs response: %w", err)
 	}
 
+	// Run exit cmd to end the inspect process that we started earlier
 	_, _ = io.WriteString(stdinPipe, "exit\n")
 	if err := inspectCmd.Wait(); err != nil {
-		return nil, fmt.Errorf("nydus-image inspect exited: %w", err)
+		return nil, fmt.Errorf("error while trying to exit the nydus-image inspect process: %w", err)
 	}
 
 	return blobs, nil
 }
 
-// Reads bytes until the REPL output appears, returning everything before it.
-func readUntilPrompt(r *bufio.Reader) (string, error) {
-	var buf strings.Builder
-	sentinel := []byte(replPrompt)
-	n := len(sentinel)
+// Reads from the specific reader until the nydus prompt is active
+// => Returns the output before the prompt came
+func readUntilPrompt(reader *bufio.Reader) (string, error) {
+	var buffer strings.Builder
+	nydusExpectedPromptLen := len(nydusReadyMarker)
+	window := make([]byte, 0, nydusExpectedPromptLen)
 
-	window := make([]byte, 0, n)
-
+	// Read byte by byte until we find the prompt or reach EOF
 	for {
-		b, err := r.ReadByte()
+		currByte, err := reader.ReadByte()
 		if err != nil {
 			if err == io.EOF {
-				out := buf.String()
+				out := buffer.String()
 				preview := out
 				if len(preview) > 200 {
 					preview = preview[:200]
 				}
-				return "", fmt.Errorf("nydus-image inspect exited before emitting prompt (output so far: %q): %w", preview, io.ErrUnexpectedEOF)
+				return "", fmt.Errorf("nydus-image inspect exited before a prompt appeared - output so far: %q, error: %w", preview, io.ErrUnexpectedEOF)
 			}
-			return "", fmt.Errorf("error reading inspect-cmd stdout: %w", err)
+			return "", fmt.Errorf("error while reading the inspect-cmd output: %w", err)
 		}
-		buf.WriteByte(b)
-		if buf.Len() > maxPromptReadBytes {
-			return "", fmt.Errorf("error in readUntilPrompt: output exceeded 1 MiB without prompt")
+
+		// Append the current byte to the buffer and throw if we are exceeding our max ´size to read until assuming an error or stuck
+		buffer.WriteByte(currByte)
+		if buffer.Len() > maxPromptReadBytes {
+			return "", fmt.Errorf("Output exceeded %d bytes without prompt in readUntilPrompt fkt", maxPromptReadBytes)
 		}
-		window = append(window, b)
-		if len(window) > n {
+
+		// Sliding window to check for the expected prompt
+		window = append(window, currByte)
+		if len(window) > nydusExpectedPromptLen {
 			window = window[1:]
 		}
-		if len(window) == n && string(window) == replPrompt {
-			// Strip the sentinel from the accumulated buffer
-			s := buf.String()
-			return s[:len(s)-n], nil
+
+		// Check if the current window matches the expected prompt
+		if len(window) == nydusExpectedPromptLen && string(window) == nydusReadyMarker {
+
+			// Return the output before the prompt
+			lastOutput := buffer.String()
+			return lastOutput[:len(lastOutput)-nydusExpectedPromptLen], nil
 		}
 	}
 }
 
-// Parses the text output of the blobs listing into one entry per blob.
-// Each entry must contain Blob Index, Blob ID, Compressed Data Size, and Chunk Count
+// Parses the output of the blobs command to extract the blob metadata into blobMeta format
 func parseBlobsTable(text string) ([]blobMeta, error) {
 	var blobs []blobMeta
-	var cur *blobMeta
-	var haveIndex, haveBlobID, haveCDS, haveCC bool
+	var currBlobMeta *blobMeta
+	var haveIndex, haveBlobID bool
 
+	// Flush the current blob entry to the blobs arr and reset the state for the next blob entry
 	flush := func(entryNum int) error {
-		if cur == nil {
+		if currBlobMeta == nil {
 			return nil
 		}
+
 		if !haveIndex {
-			return fmt.Errorf("blob entry #%d: missing %q", entryNum, "Blob Index")
+			return fmt.Errorf("Current blob entry #%d - missing Blob Index", entryNum)
 		}
+
 		if !haveBlobID {
-			return fmt.Errorf("blob entry #%d (index %d): missing %q", entryNum, cur.Index, "Blob ID")
+			return fmt.Errorf("Current blob entry #%d - (index %d): missing Blob ID", entryNum, currBlobMeta.Index)
 		}
-		if !haveCDS {
-			return fmt.Errorf("blob entry #%d (index %d): missing %q", entryNum, cur.Index, "Compressed Data Size")
-		}
-		if !haveCC {
-			return fmt.Errorf("blob entry #%d (index %d): missing %q", entryNum, cur.Index, "Chunk Count")
-		}
-		blobs = append(blobs, *cur)
+
+		blobs = append(blobs, *currBlobMeta)
 		return nil
 	}
 
+	// Go over each line of the blobs output...
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 
 		if strings.HasPrefix(trimmed, "Blob Index:") {
-			// New entry: flush the previous one
-			if cur != nil {
+
+			// Flush the previous blob entry before starting this new one
+			if currBlobMeta != nil {
 				if err := flush(len(blobs)); err != nil {
 					return nil, err
 				}
 			}
-			cur = &blobMeta{}
-			haveIndex, haveBlobID, haveCDS, haveCC = false, false, false, false
 
-			val := strings.TrimSpace(strings.TrimPrefix(trimmed, "Blob Index:"))
-			val = strings.ReplaceAll(val, ",", "")
-			idx, parseErr := strconv.Atoi(val)
+			// Start a new blob entry
+			currBlobMeta = &blobMeta{}
+			haveIndex, haveBlobID = false, false
+
+			// Blob index parsing
+			metadataValue := strings.TrimSpace(strings.TrimPrefix(trimmed, "Blob Index:"))
+			metadataValue = strings.ReplaceAll(metadataValue, ",", "")
+			idx, parseErr := strconv.Atoi(metadataValue)
 			if parseErr != nil {
-				return nil, fmt.Errorf("error parsing Blob Index %q: %w", val, parseErr)
+				return nil, fmt.Errorf("error occurred while trying parsing Blob Index %q: %w", metadataValue, parseErr)
 			}
-			cur.Index = idx
+			currBlobMeta.Index = idx
 			haveIndex = true
 			continue
 		}
 
-		if cur == nil {
+		if currBlobMeta == nil {
 			continue
 		}
-
-		// "Raw Blob ID:" must NOT match the "Blob ID:" branch below, as the former is a different field that appears in the same section of the outpu,
-		// but is not needed for chunk resolution
+		// Similar but not the data we want to parse, so we skip it
+		// => Need to skip it explicitly, since it appears at the expected position but is not what we want
 		if strings.HasPrefix(trimmed, "Raw Blob ID:") {
 			continue
 		}
 
+		// Blob ID parsing
 		if !haveBlobID && strings.HasPrefix(trimmed, "Blob ID:") {
 			val := strings.TrimSpace(strings.TrimPrefix(trimmed, "Blob ID:"))
 			if val == "" {
-				return nil, fmt.Errorf("blob entry (index %d): empty %q value", cur.Index, "Blob ID")
+				return nil, fmt.Errorf("error occurred for blob entry (index %d): empty Blob ID value", currBlobMeta.Index)
 			}
-			cur.BlobID = val
+			currBlobMeta.BlobID = val
 			haveBlobID = true
-			continue
-		}
-
-		if !haveCDS && strings.HasPrefix(trimmed, "Compressed Data Size:") {
-			val := strings.TrimSpace(strings.TrimPrefix(trimmed, "Compressed Data Size:"))
-			val = strings.ReplaceAll(val, ",", "")
-			v, parseErr := strconv.ParseUint(val, 10, 64)
-			if parseErr != nil {
-				return nil, fmt.Errorf("parse Compressed Data Size %q (blob index %d): %w", val, cur.Index, parseErr)
-			}
-			cur.CompressedDataSize = v
-			haveCDS = true
-			continue
-		}
-
-		if !haveCC && strings.HasPrefix(trimmed, "Chunk Count:") {
-			val := strings.TrimSpace(strings.TrimPrefix(trimmed, "Chunk Count:"))
-			val = strings.ReplaceAll(val, ",", "")
-			v, parseErr := strconv.Atoi(val)
-			if parseErr != nil {
-				return nil, fmt.Errorf("error parsing Chunk Count %q (blob index %d): %w", val, cur.Index, parseErr)
-			}
-			cur.ChunkCount = v
-			haveCC = true
-			continue
 		}
 	}
 
 	// Flush the final entry
-	if cur != nil {
+	if currBlobMeta != nil {
 		if err := flush(len(blobs)); err != nil {
 			return nil, err
 		}
 	}
 
 	if len(blobs) == 0 {
-		return nil, fmt.Errorf("no blob entries found in blobs response")
+		return nil, fmt.Errorf("No blob entries found, which is not expected!")
 	}
 	return blobs, nil
 }
 
 // Reads the chunk dump output line by line and returns one unique chunk per content hash.
-func parseCheckDump(r io.Reader, blobs []blobMeta, imageName string) ([]ChunkInfo, error) {
-	scanner := bufio.NewScanner(r)
+func parseCheckDump(reader io.Reader, allBlobs []blobMeta, imageName string) ([]ChunkInfo, error) {
+	scanner := bufio.NewScanner(reader)
 	const maxLine = 1 << 20 // Increase buffer cap since some chunk lines will be longer
 	scanner.Buffer(make([]byte, 64*1024), maxLine)
 
-	// Build blob_index - BlobID map for faster resolution
-	blobByIndex := make(map[int]string, len(blobs))
-	for _, b := range blobs {
+	// Build blob_index - BlobID map for faster resolution of blob_index to blob digest
+	blobByIndex := make(map[int]string, len(allBlobs))
+	for _, b := range allBlobs {
 		blobByIndex[b.Index] = b.BlobID
 	}
 
+	// State that contains the current file path and the list of unique chunks seen so far
 	var (
 		currentFilePath string
 		chunks          []ChunkInfo
@@ -283,12 +273,15 @@ func parseCheckDump(r io.Reader, blobs []blobMeta, imageName string) ([]ChunkInf
 		lineNum         int
 	)
 
+	// Read the check cmd output and parse the chunk lines while keeping track of the current file path and deduplicating by content hash
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Text()
 		trimmed := strings.TrimLeft(line, " \t")
 
 		switch {
+
+		// File lines contain the file path => Set it
 		case strings.HasPrefix(trimmed, "inode: file "):
 			path, err := parseInodePath(trimmed)
 			if err != nil {
@@ -296,167 +289,190 @@ func parseCheckDump(r io.Reader, blobs []blobMeta, imageName string) ([]ChunkInf
 			}
 			currentFilePath = path
 
+		// Directory and symlink lines do not contain chunks => Clear the current file path
 		case strings.HasPrefix(trimmed, "inode: dir "),
 			strings.HasPrefix(trimmed, "inode: symlink "):
 			currentFilePath = ""
 
+		// Chunk lines contain the chunk metadata => Parse it and add it to the list of unique chunks if not seen before
 		case strings.HasPrefix(trimmed, "chunk:"):
-			ci, err := parseCheckChunkLine(trimmed, currentFilePath, blobByIndex, imageName, len(chunks))
+			chunkInfo, err := parseCheckChunkLine(trimmed, currentFilePath, blobByIndex, imageName)
 			if err != nil {
 				return nil, fmt.Errorf("error at line %d: %w", lineNum, err)
 			}
 
-			if _, ok := seen[ci.Hash]; ok {
+			// Only add the chunk if it has not been seen before => by content hash
+			if _, ok := seen[chunkInfo.Hash]; ok {
 				continue
 			}
-			seen[ci.Hash] = struct{}{}
-			chunks = append(chunks, ci)
+			seen[chunkInfo.Hash] = struct{}{}
+			chunks = append(chunks, chunkInfo)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error occured while scan check stdout: %w", err)
+		return nil, fmt.Errorf("error occurred while scanning the check cmd stdout: %w", err)
 	}
 
 	return chunks, nil
 }
 
-// Extracts the file path from the quoted section of an inode line.
-// Returns an error if the line does not contain a properly quoted path.
+// Returns the text between the first pair of two double quotes in a given line
+// Example: `inode: file "path/to/file"` => returns `path/to/file`
 func parseInodePath(line string) (string, error) {
-	// Find the first '"' and the matching '"' that closes the path
+	// Find the first '"'
 	start := strings.IndexByte(line, '"')
 	if start < 0 {
-		return "", fmt.Errorf("error at inode - line missing opening quote: %q", line)
+		return "", fmt.Errorf("error at parsing an inode path: line missing opening quote: %q", line)
 	}
+
+	// Find the next '"' after the first one
 	end := strings.IndexByte(line[start+1:], '"')
 	if end < 0 {
-		return "", fmt.Errorf("error at inode - line missing closing quote: %q", line)
+		return "", fmt.Errorf("error at parsing an inode path:  line missing closing quote: %q", line)
 	}
 	return line[start+1 : start+1+end], nil
 }
 
-// Parses one chunk record line into a ChunkInfo, resolving the blob index to a blob digest.
-func parseCheckChunkLine(line, filePath string, blobByIndex map[int]string, imageName string, chunkIndex int) (ChunkInfo, error) {
-	// Strip the "chunk:" prefix
+// Parses a chunk line from the nydus-image check output and returns its chunk metadata
+func parseCheckChunkLine(line, filePath string, blobByIndex map[int]string, imageName string) (ChunkInfo, error) {
+	// Remove the "chunk:" prefix
 	body := strings.TrimSpace(strings.TrimPrefix(line, "chunk:"))
 
+	// State for the chunk metadata fields to keep track what data we're looking for
 	var (
-		id               string
-		blobIndex        int
-		haveID           bool
-		haveBlobIndex    bool
-		compressedOffset uint64
-		compressedSize   uint64
-		haveCompressed   bool
-		uncompSize       uint64
-		haveUncompSize   bool
+		id                   string
+		blobIndex            int
+		haveID               bool
+		haveBlobIndex        bool
+		compressedOffset     uint64
+		compressedSize       uint64
+		haveCompressed       bool
+		uncompressedSize     uint64
+		haveUncompressedSize bool
 	)
 
+	// Split the chunk line by commas and parse each field
 	for _, raw := range strings.Split(body, ",") {
+
 		field := strings.TrimSpace(raw)
+		// No fields to parse => skip
 		if field == "" {
 			continue
 		}
 
-		// Each field is "<key> <value>" or "<key> <a>/<b>". Split on the first space
-		sp := strings.IndexByte(field, ' ')
-		if sp < 0 {
+		// Each field is "<key> <value>" or "<key> <a>/<b>", so we split on the first space
+		firstSpace := strings.IndexByte(field, ' ')
+		if firstSpace < 0 {
 			continue
 		}
 
-		key := field[:sp]
-		val := strings.TrimSpace(field[sp+1:])
+		key := field[:firstSpace]
+		value := strings.TrimSpace(field[firstSpace+1:])
 
+		// Parse the field based on its key
 		switch key {
 		case "id":
-			id = val
+			id = value
 			haveID = true
 
 		case "blob_index":
-			n, err := strconv.Atoi(val)
+			n, err := strconv.Atoi(value)
 			if err != nil {
-				return ChunkInfo{}, fmt.Errorf("error while parsing 'blob_index' %q: %w", val, err)
+				return ChunkInfo{}, fmt.Errorf("error while parsing blob_index %q: %w", value, err)
 			}
+
 			blobIndex = n
 			haveBlobIndex = true
 
 		case "compressed":
-			offset, size, err := parseSlashOffsetSize(val)
+			offset, size, err := parseSlashOffsetSize(value)
 			if err != nil {
-				return ChunkInfo{}, fmt.Errorf("error while parsing 'compressed' %q: %w", val, err)
+				return ChunkInfo{}, fmt.Errorf("error while parsing compressed %q: %w", value, err)
 			}
+
 			compressedOffset = offset
 			compressedSize = size
 			haveCompressed = true
+
 		case "uncompressed":
-			size, err := parseSlashSize(val)
+			size, err := parseSlashSize(value)
 			if err != nil {
-				return ChunkInfo{}, fmt.Errorf("error while parsing 'uncompressed' %q: %w", val, err)
+				return ChunkInfo{}, fmt.Errorf("error while parsing uncompressed %q: %w", value, err)
 			}
-			uncompSize = size
-			haveUncompSize = true
+
+			uncompressedSize = size
+			haveUncompressedSize = true
 		}
 	}
 
 	if !haveID || id == "" {
-		return ChunkInfo{}, fmt.Errorf("chunk line missing 'id': %q", line)
+		return ChunkInfo{}, fmt.Errorf("Chunk line missing id: %q", line)
 	}
 	if !haveBlobIndex {
-		return ChunkInfo{}, fmt.Errorf("chunk line missing 'blob_index': %q", line)
+		return ChunkInfo{}, fmt.Errorf("Chunk line missing blob_index: %q", line)
 	}
 	if !haveCompressed {
-		return ChunkInfo{}, fmt.Errorf("chunk line missing 'compressed' size: %q", line)
+		return ChunkInfo{}, fmt.Errorf("Chunk line missing compressed size: %q", line)
 	}
-	if !haveUncompSize {
-		return ChunkInfo{}, fmt.Errorf("chunk line missing 'uncompressed' size: %q", line)
+	if !haveUncompressedSize {
+		return ChunkInfo{}, fmt.Errorf("Chunk line missing uncompressed size: %q", line)
 	}
 
+	// Resolve the blob index to the corresponding blob digest using the blobByIndex map
+	// => Needed since the chunk line only contains the blob_index, but we want to store the blob digest in the ChunkInfo
 	blobID, ok := blobByIndex[blobIndex]
 	if !ok {
-		return ChunkInfo{}, fmt.Errorf("chunk references blob_index %d which is not in the bootstrap blob table", blobIndex)
+		return ChunkInfo{}, fmt.Errorf("Chunk references blob_index %d which is not in the bootstrap blob table", blobIndex)
 	}
 
 	return ChunkInfo{
-		Hash:                      id,
-		Size:                      uncompSize,
-		CompressedOffset:          compressedOffset,
-		CompressedSize:            compressedSize,
-		CompressedSizeGranularity: "chunk",
-		BlobDigest:                blobID,
-		Image:                     imageName,
-		ChunkIndex:                chunkIndex,
-		FilePath:                  filePath,
+		Hash:             id,
+		Size:             uncompressedSize,
+		CompressedOffset: compressedOffset,
+		CompressedSize:   compressedSize,
+		BlobDigest:       blobID,
+		Image:            imageName,
+		FilePath:         filePath,
 	}, nil
 }
 
-// Parses an offset/size pair and returns the size component.
+// HELPER
+// Parses a string of the format "0/123" and returns 123
 func parseSlashSize(s string) (uint64, error) {
+
+	// Find the '/' character in the string
 	slash := strings.IndexByte(s, '/')
 	if slash < 0 {
-		return 0, fmt.Errorf("expected '<offset>/<size>', got %q", s)
+		return 0, fmt.Errorf("Expected '<offset>/<size>' format, but got %q", s)
 	}
-	val := strings.TrimSpace(s[slash+1:])
-	n, err := strconv.ParseUint(val, 10, 64)
+
+	rawSizeValue := strings.TrimSpace(s[slash+1:])
+	parsedSize, err := strconv.ParseUint(rawSizeValue, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("non-integer size %q: %w", val, err)
+		return 0, fmt.Errorf("Parsed size is a non-integer - %q: %w", rawSizeValue, err)
 	}
-	return n, nil
+
+	return parsedSize, nil
 }
 
 // Parses an offset/size pair and returns both components.
 func parseSlashOffsetSize(s string) (offset uint64, size uint64, err error) {
+	// Find the '/' character in the string
 	slash := strings.IndexByte(s, '/')
 	if slash < 0 {
-		return 0, 0, fmt.Errorf("expected '<offset>/<size>', got %q", s)
+		return 0, 0, fmt.Errorf("Expected '<offset>/<size>' format, but got %q", s)
 	}
+
 	offset, err = strconv.ParseUint(strings.TrimSpace(s[:slash]), 10, 64)
 	if err != nil {
 		return 0, 0, fmt.Errorf("non-integer offset in %q: %w", s, err)
 	}
+
 	size, err = strconv.ParseUint(strings.TrimSpace(s[slash+1:]), 10, 64)
 	if err != nil {
 		return 0, 0, fmt.Errorf("non-integer size in %q: %w", s, err)
 	}
+
 	return offset, size, nil
 }

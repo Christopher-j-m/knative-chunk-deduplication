@@ -1,0 +1,25 @@
+# Dragonfly on the local rig, with the settings of the managed-cloud campaign
+# so the two deployments differ only in where the registry is. The registry
+# address is filled in at install time, because the rig registry is reached by
+# its address on the cluster network rather than by name
+client:
+  config:
+    proxy:
+      registryMirror:
+        addr: __REGISTRY__
+# Manages the schedulers
+manager:
+  replicas: 1
+# Decides from which other node a piece is fetched, with the registry as fallback
+scheduler:
+  replicas: 1
+  config:
+    # The cloud registry rejected the seed peer's unauthenticated fetches, so
+    # the campaign ran without one; the rig keeps that setting for parity
+    seedPeer:
+      enable: false
+    scheduler:
+      retryBackToSourceLimit: 1
+      retryInterval: 500ms
+seedClient:
+  enable: false

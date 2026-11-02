@@ -4,8 +4,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Metrics groups every Prometheus collector the cache exposes. A nil receiver
-// is supported so unit tests can build a cache without wiring metrics.
 type Metrics struct {
 	Hits              prometheus.Counter
 	Misses            prometheus.Counter
@@ -15,21 +13,19 @@ type Metrics struct {
 	GetLatencySeconds prometheus.Histogram
 }
 
-// NewMetrics creates a Metrics bundle and registers it on the given registerer.
-// Pass prometheus.DefaultRegisterer for production wiring.
 func NewMetrics(registerer prometheus.Registerer) *Metrics {
-	m := &Metrics{
+	allMetrics := &Metrics{
 		Hits: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "cache_hits_total",
-			Help: "Cumulative number of cache hits since process start",
+			Help: "Number of cache hits since start",
 		}),
 		Misses: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "cache_misses_total",
-			Help: "Cumulative number of cache misses since process start",
+			Help: "Number of cache misses since start",
 		}),
 		PutBytes: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "cache_put_bytes_total",
-			Help: "Cumulative bytes accepted via Put",
+			Help: "Total bytes received via Put",
 		}),
 		StoredBytes: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "cache_stored_bytes",
@@ -37,7 +33,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 		}),
 		StoredChunks: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "cache_stored_chunks",
-			Help: "Current number of distinct chunks held",
+			Help: "Current number of unique chunks in cache",
 		}),
 		GetLatencySeconds: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "cache_get_latency_seconds",
@@ -48,9 +44,10 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 
 	if registerer != nil {
 		registerer.MustRegister(
-			m.Hits, m.Misses, m.PutBytes,
-			m.StoredBytes, m.StoredChunks, m.GetLatencySeconds,
+			allMetrics.Hits, allMetrics.Misses, allMetrics.PutBytes,
+			allMetrics.StoredBytes, allMetrics.StoredChunks, allMetrics.GetLatencySeconds,
 		)
 	}
-	return m
+
+	return allMetrics
 }

@@ -1,14 +1,4 @@
-# One chunk-proxy pod per node. It listens on loopback TCP so the host-run
-# nydusd (spawned by the host-process snapshotter, see
-# scripts/node-snapshotter.sh) can reach it and name the requested blob in the
-# URL path, which nydusd does not do over unix sockets. It dials the cache by
-# its pinned ClusterIP (10.43.0.50) because host-network processes cannot use
-# cluster DNS.
-#
-# RUN-TIME NOTE: scripts/config-switch.sh toggles the cache by patching
-# containers/0/args/1, which is the "--cache-enabled=true" line below. Keep
-# --cache-enabled as the SECOND argument and chunk-proxy as the FIRST (only)
-# container, or update the switcher.
+# The cluster cache chunk proxy pod on every node 
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

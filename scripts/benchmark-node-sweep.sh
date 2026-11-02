@@ -26,6 +26,10 @@ SCRATCH="$(mktemp -d)"
 CELLS_RUN=0
 CELLS_SKIPPED=0
 
+# shellcheck source=cold-guard.sh
+source "${REPO_ROOT}/scripts/cold-guard.sh"
+CONFIGURED_BPS="$(rate_bytes_per_second "${RATE}")"
+
 mapfile -t ALL_NODES < <("${REPO_ROOT}/scripts/cluster-nodes.sh")
 AVAILABLE="${#ALL_NODES[@]}"
 if (( AVAILABLE == 0 )); then
@@ -134,6 +138,19 @@ for config in ${CONFIGS}; do
 
       csv="${OUTDIR}/${PREFIX}-config${config}-${image}-n${count}-rtt${RTT}ms-rate${RATE}-$(date +%Y%m%dT%H%M%S).csv"
 
+      # The host's processor load is sampled for the whole cell, so a slow
+      # eager pull can be read as network-bound or processor-bound afterwards
+      "${REPO_ROOT}/scripts/sample-host-cpu.sh" "${csv%.csv}.cpu.csv" &
+      sampler=$!
+
+      # A sampler that dies at once would leave the cell without the trace it
+      # exists to explain, so the sweep stops rather than measure blind
+      sleep 2
+      if ! kill -0 "${sampler}" 2>/dev/null || [[ ! -s "${csv%.csv}.cpu.csv" ]]; then
+        echo "### sweep: ABORT, the host CPU sampler did not start for ${csv}" >&2
+        exit 1
+      fi
+
       # The scale target is the whole cluster: the seed takes one node and the
       # remaining n-1 nodes each cold-start the same image, which is the
       # scenario whose registry traffic the (n-1)/n claim is about
@@ -142,7 +159,11 @@ for config in ${CONFIGS}; do
         echo "### sweep: FAILED config ${config} ${image} n=${count}"
         [[ -f "${csv}" ]] && mv "${csv}" "${csv%.csv}.failed-partial"
         kubectl delete ksvc "${image}" --ignore-not-found --timeout=120s || true
+      elif [[ "${config}" == "1" ]]; then
+        assert_cell_cold "${csv}" "${image}" "${CONFIGURED_BPS}" || true
       fi
+      kill "${sampler}" 2>/dev/null || true
+      wait "${sampler}" 2>/dev/null || true
     done
   done
 done

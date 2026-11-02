@@ -1,0 +1,7 @@
+config,image,rate,one_pod_repetitions,two_pods_repetitions,one_pod_cold_pods,two_pods_cold_pods,one_pod_mean_s,two_pods_mean_s,second_replica_cost_s,interval_low_s,interval_high_s,one_pod_median_s,two_pods_median_s,median_difference_s
+1,fn-java-springboot,600mbit,5,5,5,10,6.262,8.254,1.992,1.519,2.414,6.002,8.376,2.374
+1,fn-python-hello,600mbit,5,5,5,10,4.415,4.701,0.286,-0.255,0.806,4.262,4.71,0.449
+1,fn-pytorch-cpu,600mbit,5,5,5,10,11.661,16.307,4.646,3.883,5.238,11.791,16.429,4.638
+4,fn-java-springboot,600mbit,5,5,5,10,5.316,6.526,1.21,0.705,1.81,5.417,6.338,0.921
+4,fn-python-hello,600mbit,5,5,5,10,2.584,2.86,0.276,-0.104,0.653,2.585,2.894,0.309
+4,fn-pytorch-cpu,600mbit,4,5,4,10,6.407,6.402,-0.005,-0.505,0.477,6.453,6.396,-0.057

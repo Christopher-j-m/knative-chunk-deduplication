@@ -7,20 +7,16 @@ set -eu
 # DaemonSet stages the payload at /opt/nydus-installer first.
 PAYLOAD=/opt/nydus-installer
 
+# Setup nydus by copying the nydus grpc, daemon and image to the user bin and the settings into /etc/nydus
 install -m 0755 ${PAYLOAD}/containerd-nydus-grpc ${PAYLOAD}/nydusd ${PAYLOAD}/nydus-image /usr/local/bin/
 mkdir -p /etc/nydus /var/lib/containerd-nydus
 cp ${PAYLOAD}/config.toml /etc/nydus/config.toml
 cp ${PAYLOAD}/nydusd-config.json /etc/nydus/nydusd-config.json
 cp ${PAYLOAD}/nydus-snapshotter.service /etc/systemd/system/nydus-snapshotter.service
 systemctl daemon-reload
-systemctl enable --now nydus-snapshotter
+systemctl enable --now nydus-snapshotter # Start nydus now and on future boot
 
-# Register the proxy plugin with containerd exactly once. The plugin being
-# registered is harmless while the CRI default stays overlayfs; the CRI
-# default itself is config-switch-aks.sh's job, not the installer's.
-# RUN-TIME NOTE: if the AKS config already carries a [proxy_plugins] table,
-# nest only the sub-table instead of appending a second header (duplicate
-# top-level tables are a TOML error).
+# Add the nydus snapshotter to containerd settings (if entry not already there)
 if ! grep -q 'proxy_plugins.nydus' /etc/containerd/config.toml; then
   cat >>/etc/containerd/config.toml <<'EOF'
 
@@ -31,4 +27,3 @@ if ! grep -q 'proxy_plugins.nydus' /etc/containerd/config.toml; then
 EOF
   systemctl restart containerd
 fi
-echo "node converged"

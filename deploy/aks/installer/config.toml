@@ -1,6 +1,4 @@
-# Snapshotter daemon config installed to /etc/nydus/config.toml on every AKS
-# node by the nydus-node-setup DaemonSet. AKS variant of
-# deploy/local/snapshotter/config.toml: plain host paths, no k3s prefixes.
+# Nydus snapshotter settings
 version = 1
 root = "/var/lib/containerd-nydus"
 address = "/run/containerd-nydus/containerd-nydus-grpc.sock"

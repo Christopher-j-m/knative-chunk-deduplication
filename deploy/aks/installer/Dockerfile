@@ -1,9 +1,4 @@
-# Carries the patched static nydus binaries + node configs + installer script
-# to AKS nodes. The main container is a sleep loop used as the host-exec
-# vehicle by the config switcher, reset, and benchmark scripts.
-# Build context = repo root; run scripts/fetch-nydus-binaries.sh first so
-# deploy/local/bin is populated (its containerd-nydus-grpc carries the
-# REQUIRED http-proxy backend patch — never substitute the stock release).
+# Container image that contains the nydus setup we need on every node
 FROM alpine:3.23
 COPY deploy/local/bin/containerd-nydus-grpc /payload/containerd-nydus-grpc
 COPY deploy/local/bin/nydusd /payload/nydusd

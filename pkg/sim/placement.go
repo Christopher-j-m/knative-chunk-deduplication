@@ -5,18 +5,14 @@ import (
 	"math/rand"
 )
 
-// Placement decides which node a cold-starting pod lands on. It is the
-// modelling choice that matters most on a large cluster, because it sets
-// how often a pod finds its image already on the node.
+// Decider on which simulated node a cold starting pod lands on
 type Placement interface {
-	Name() string
-	Place(podsPerNode []int) int
+	Name() string                // Name of the placement strat, can be either "packed" or "random"
+	Place(podsPerNode []int) int // Retuns the amount of pods running on a specific node
 }
 
-// NewPlacement builds a placement rule by name: packed spreads by pod
-// count but keeps to the lowest indices on ties, the way a least-allocated
-// scheduler behaves on a cluster with spare nodes; random ignores load and
-// is the worst case for node-local caching.
+// Packed = pick the least busy node
+// Random = pick any node randomly
 func NewPlacement(name string, seed int64) (Placement, error) {
 	switch name {
 	case "packed":
@@ -24,7 +20,7 @@ func NewPlacement(name string, seed int64) (Placement, error) {
 	case "random":
 		return &randomPlacement{rng: rand.New(rand.NewSource(seed))}, nil
 	default:
-		return nil, fmt.Errorf("unknown placement %q", name)
+		return nil, fmt.Errorf("unknown placement strat %q", name)
 	}
 }
 
@@ -32,6 +28,7 @@ type packedPlacement struct{}
 
 func (packedPlacement) Name() string { return "packed" }
 
+// Returns the node that has the fewest pods, tiebreaker goes to the node with the lowest id
 func (packedPlacement) Place(podsPerNode []int) int {
 	node := 0
 	for n := 1; n < len(podsPerNode); n++ {
@@ -39,6 +36,7 @@ func (packedPlacement) Place(podsPerNode []int) int {
 			node = n
 		}
 	}
+
 	return node
 }
 
@@ -48,6 +46,6 @@ type randomPlacement struct {
 
 func (*randomPlacement) Name() string { return "random" }
 
-func (p *randomPlacement) Place(podsPerNode []int) int {
-	return p.rng.Intn(len(podsPerNode))
+func (radomStrat *randomPlacement) Place(podsPerNode []int) int {
+	return radomStrat.rng.Intn(len(podsPerNode))
 }

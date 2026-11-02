@@ -1,0 +1,4 @@
+config,image,rtt_ms,rate,cold_median_s,cold_mean_s,cold_min_s,cold_max_s,cold_n,cold_ci_low_s,cold_ci_high_s,warm_median_s,warm_mean_s,warm_n,seed_median_s,seed_mean_s,seed_ci_low_s,seed_ci_high_s,above_floor_mean_s,netem_dropped_seed,netem_dropped_scaleout,netem_dropped_scaleout_max
+1,fn-python-ml,80,600mbit,9.997,9.883,8.588,10.799,6,9.694,10.045,2.21,2.072,3,8.911,9.23,8.822,9.957,7.811,0,40,40
+2,fn-python-ml,80,600mbit,37.007,37.148,36.578,38.055,6,37.007,37.359,2.168,2.367,3,36.884,36.876,36.463,37.282,34.781,0,0,0
+2s,fn-python-ml,80,600mbit,14.756,14.945,14.308,16.694,6,14.578,15.501,2.107,2.075,3,13.921,14.106,13.872,14.526,12.87,0,0,0

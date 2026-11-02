@@ -7,6 +7,7 @@ uv run --with matplotlib,pandas make_eval_figures.py
 
 import glob
 import os
+import sys
 
 import matplotlib
 from matplotlib.lines import Line2D
@@ -25,18 +26,31 @@ SUMMARIES = os.path.join(
     "../../../analysis/results/summaries",
 )
 
+# The guarded managed-cloud campaign and its cross-region anchors
+CLOUD_PREFIX = "aks2-scaleout"
+# Where the managed-cloud figure cuts its axis
+CLOUD_AXIS_TOP = 20
+
+# Interval estimates come from the shared benchmark helper
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../scripts"))
+from cell_bootstrap import mean_interval, repetition_groups  # noqa: E402
+
 # One fixed color per configuration, identical across every figure
 CONFIG_COLORS = {
     1: "#0072b2",
     2: "#e69f00",
     3: "#56b4e9",
     4: "#009e73",
+    "2s": "#cc79a7",
 }
+# The managed-cloud campaign has only the four numbered configurations
+CLOUD_CONFIGS = (1, 2, 3, 4)
 CONFIG_LABELS = {
     1: "Config 1 (OCI)",
     2: "Config 2 (Nydus)",
     3: "Config 3 (Nydus + Dragonfly)",
     4: "Config 4 (Nydus + cluster cache)",
+    "2s": "Config 2s (stock nydusd)",
 }
 
 IMAGES = [
@@ -75,18 +89,26 @@ def phase_stats(frame, phase, warm):
     return values.mean(), values.min(), values.max()
 
 
+# Mean of a phase with its 95 percent bootstrap interval, so the error bar
+# shows how far a repeat of the cell could land rather than the extremes
+def phase_interval(frame, phase, warm):
+    rows = frame[(frame["phase"] == phase) & (frame["warm"] == warm)]
+    low, high = mean_interval(repetition_groups(rows))
+    return rows["ready_seconds"].mean(), low, high
+
+
 def cold_by_config():
     fig, ax = plt.subplots(figsize=(7.2, 3.4))
-    n_configs = len(CONFIG_COLORS)
+    n_configs = len(CLOUD_CONFIGS)
     width = 0.19
 
-    for slot, config in enumerate(sorted(CONFIG_COLORS)):
+    for slot, config in enumerate(CLOUD_CONFIGS):
         xs, means, err_low, err_high, warms = [], [], [], [], []
         for idx, (image, _) in enumerate(IMAGES):
-            frame = load_cell("aks-scaleout", config, image)
+            frame = load_cell(CLOUD_PREFIX, config, image)
             if frame is None:
                 continue
-            mean, lo, hi = phase_stats(frame, "scaleout", "no")
+            mean, lo, hi = phase_interval(frame, "scaleout", "no")
             warm_mean, _, _ = phase_stats(frame, "scaleout", "yes")
             x = idx + (slot - (n_configs - 1) / 2) * width
             xs.append(x)
@@ -95,66 +117,31 @@ def cold_by_config():
             err_high.append(hi - mean)
             warms.append(warm_mean)
 
-        ax.bar(xs, means, width=width * 0.92, color=CONFIG_COLORS[config],
+        # A bar far above the axis cut is drawn to the cut and labeled with
+        # its value, so the other bars stay readable
+        shown = [min(mean, CLOUD_AXIS_TOP) for mean in means]
+        ax.bar(xs, shown, width=width * 0.92, color=CONFIG_COLORS[config],
                label=CONFIG_LABELS[config], zorder=2)
-        ax.errorbar(xs, means, yerr=[err_low, err_high], fmt="none",
-                    ecolor="#444444", elinewidth=0.8, capsize=1.6, zorder=3)
+        for x, mean, low, high in zip(xs, means, err_low, err_high):
+            if mean > CLOUD_AXIS_TOP:
+                ax.annotate(f"{mean:.0f} s", (x, CLOUD_AXIS_TOP), ha="center",
+                            va="bottom", fontsize=7, xytext=(0, 1.5),
+                            textcoords="offset points")
+                continue
+            ax.errorbar([x], [mean], yerr=[[low], [high]], fmt="none",
+                        ecolor="#444444", elinewidth=0.8, capsize=1.6, zorder=3)
         # short black tick marking the matching warm floor on each bar
         for x, warm in zip(xs, warms):
             ax.hlines(warm, x - width * 0.46, x + width * 0.46,
                       color="black", linewidth=1.1, zorder=4)
 
+    ax.set_ylim(0, CLOUD_AXIS_TOP)
     ax.set_xticks(range(len(IMAGES)))
     ax.set_xticklabels([label for _, label in IMAGES])
     ax.set_ylabel("Scale-out cold start (s)")
     ax.legend(ncol=2, loc="upper left", fontsize=8)
     fig.tight_layout()
     fig.savefig(os.path.join(OUT, "eval_cold_by_config.pdf"))
-    plt.close(fig)
-
-
-def distance_anchors():
-    anchors = [("fn-python-hello", "python-hello (197 MB)"),
-               ("fn-pytorch-cpu", "pytorch-cpu (1.27 GB)")]
-    configs = [1, 2, 4]
-    regions = [("aks-scaleout", "same region"),
-               ("aks-eastus-scaleout", "eastus ($\\approx$80 ms)")]
-
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.0))
-    width = 0.24
-
-    for ax, (image, title) in zip(axes, anchors):
-        for slot, config in enumerate(configs):
-            xs, means, err_low, err_high = [], [], [], []
-            for ridx, (prefix, _) in enumerate(regions):
-                frame = load_cell(prefix, config, image)
-                if frame is None:
-                    continue
-                mean, lo, hi = phase_stats(frame, "scaleout", "no")
-                xs.append(ridx + (slot - 1) * width)
-                means.append(mean)
-                err_low.append(mean - lo)
-                err_high.append(hi - mean)
-            ax.bar(xs, means, width=width * 0.9, color=CONFIG_COLORS[config],
-                   label=CONFIG_LABELS[config] if image == anchors[0][0] else None,
-                   zorder=2)
-            ax.errorbar(xs, means, yerr=[err_low, err_high], fmt="none",
-                        ecolor="#444444", elinewidth=0.8, capsize=1.6, zorder=3)
-            for x, mean in zip(xs, means):
-                ax.annotate(f"{mean:.1f}", (x, mean), ha="center", va="bottom",
-                            fontsize=7, xytext=(0, 1.5),
-                            textcoords="offset points")
-        ax.set_xticks(range(len(regions)))
-        ax.set_xticklabels([label for _, label in regions], fontsize=8)
-        ax.set_title(title, fontsize=9)
-        ax.set_ylabel("Scale-out cold start (s)")
-
-    axes[1].set_ylabel(None)
-    fig.legend(loc="upper center", ncol=3, fontsize=8,
-               bbox_to_anchor=(0.5, 1.04))
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(os.path.join(OUT, "eval_distance_anchors.pdf"),
-                bbox_inches="tight")
     plt.close(fig)
 
 
@@ -166,64 +153,6 @@ def load_sweep_cell(config, image, rtt, rate="600mbit"):
     if not files:
         return None
     return pd.read_csv(files[-1])
-
-
-def load_ladder_cell(config, image, rtt, rate="600mbit"):
-    pattern = os.path.join(
-        BENCH, f"ladder-config{config}-{image}-rtt{rtt}ms-rate{rate}-*.csv"
-    )
-    files = sorted(glob.glob(pattern))
-    if not files:
-        return None
-    return pd.read_csv(files[-1])
-
-
-def ladder_by_config():
-    """Six-image ladder at both registry distances, one panel each."""
-    configs = (1, 2, 4)
-    width = 0.26
-
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.6))
-    for ax, rtt in zip(axes, (0, 80)):
-        for slot, config in enumerate(configs):
-            xs, means, err_low, err_high, warms = [], [], [], [], []
-            for index, (image, _) in enumerate(IMAGES):
-                frame = load_ladder_cell(config, image, rtt)
-                if frame is None:
-                    continue
-                mean, low, high = phase_stats(frame, "scaleout", "no")
-                warm_mean, _, _ = phase_stats(frame, "scaleout", "yes")
-                xs.append(index + (slot - (len(configs) - 1) / 2) * width)
-                means.append(mean)
-                err_low.append(mean - low)
-                err_high.append(high - mean)
-                warms.append(warm_mean)
-
-            ax.bar(xs, means, width=width * 0.92, color=CONFIG_COLORS[config],
-                   label=CONFIG_LABELS[config] if rtt == 0 else None, zorder=2)
-            ax.errorbar(xs, means, yerr=[err_low, err_high], fmt="none",
-                        ecolor="#444444", elinewidth=0.8, capsize=1.6, zorder=3)
-            # short black tick marking the matching warm floor on each bar
-            for x, warm in zip(xs, warms):
-                ax.plot([x - width * 0.42, x + width * 0.42], [warm, warm],
-                        color="black", linewidth=1.0, zorder=4)
-
-        ax.set_title(f"{rtt} ms registry round trip", fontsize=9)
-        ax.set_xticks(range(len(IMAGES)))
-        # the two panels leave each label about half the width the single-panel
-        # figure gives it, so they lean rather than collide
-        ax.set_xticklabels([label.replace("\n", " ") for label in
-                            (name for name, _ in IMAGES)],
-                           fontsize=7, rotation=30, ha="right")
-        ax.set_ylabel("Scale-out cold start (s)")
-
-    # a shared linear scale would flatten every bar in the left panel against
-    # the 82-second bar in the right one, so each distance keeps its own
-    axes[1].set_ylabel(None)
-    fig.legend(loc="upper center", ncol=3, fontsize=8, bbox_to_anchor=(0.5, 1.05))
-    fig.tight_layout(rect=(0, 0, 1, 0.93))
-    fig.savefig(os.path.join(OUT, "eval_ladder_by_config.pdf"), bbox_inches="tight")
-    plt.close(fig)
 
 
 def sweep_stats(frame, warm):
@@ -271,99 +200,9 @@ def distance_sweep():
     plt.close(fig)
 
 
-def crossimage_reuse():
-    pairs = [
-        ("fn-python-ml", "python-ml\n(shares python base)", 1592),
-        ("fn-go-hello", "go-hello\n(negative control)", 41),
-    ]
-    fig, ax = plt.subplots(figsize=(6.2, 2.2))
-
-    for idx, (image, _, _) in enumerate(pairs):
-        files = sorted(glob.glob(os.path.join(
-            BENCH, f"aks-crossimage-fn-python-hello-{image}-*.csv")))
-        frame = pd.read_csv(files[-1])
-        cross = frame[frame["phase"] == "cross"]
-        hits = int(cross["cache_hits_delta"].iloc[0])
-        misses = int(cross["cache_misses_delta"].iloc[0])
-        total = hits + misses
-
-        hit_share = hits / total * 100
-        miss_share = misses / total * 100
-        ax.barh(idx, hit_share, color=CONFIG_COLORS[4], zorder=2,
-                label="served from cache (seeded by python-hello)" if idx == 0 else None)
-        ax.barh(idx, miss_share, left=hit_share, color="#b0b0b0", zorder=2,
-                label="fetched from registry" if idx == 0 else None)
-        hit_word = "hit" if hits == 1 else "hits"
-        ax.annotate(f"{hits} {hit_word} ({hit_share:.1f} %)",
-                    (hit_share / 2 if hit_share > 20 else hit_share + 2, idx),
-                    va="center", ha="center" if hit_share > 20 else "left",
-                    fontsize=8, color="white" if hit_share > 20 else "#333333")
-        ax.annotate(f"{misses} misses", (hit_share + miss_share / 2, idx),
-                    va="center", ha="center", fontsize=8, color="#333333")
-
-    ax.set_yticks(range(len(pairs)))
-    ax.set_yticklabels([label for _, label, _ in pairs], fontsize=8)
-    ax.invert_yaxis()
-    ax.set_xlim(0, 100)
-    ax.set_xlabel("Share of the touched chunk set (%)")
-    ax.grid(axis="x", color="#dddddd", linewidth=0.6)
-    ax.grid(axis="y", visible=False)
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.38), ncol=2,
-              fontsize=7.5)
-    fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "eval_crossimage_reuse.pdf"),
-                bbox_inches="tight")
-    plt.close(fig)
-
-
-def bandwidth_sweep():
-    """Draw the registry-rate sweep as it was measured under the coarse probe.
-
-    The thesis does not include this figure: its cached curve was inflated by
-    the ten-second readiness probe, and the envelope figure shows the same
-    comparison from cells measured on the pinned probe. The drawing is kept
-    so the older cells stay reproducible from their own summary.
-    """
-    summary = pd.read_csv(os.path.join(SUMMARIES, "rate-sweep-summary.csv"))
-    panels = [("fn-python-hello", "python-hello (48.7 MB)"),
-              ("fn-java-springboot", "springboot (94.0 MB)"),
-              ("fn-pytorch-cpu", "pytorch-cpu (267.5 MB)")]
-    rates = sorted(summary["rate_mbit"].unique())
-
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.9), sharey=True)
-    for ax, (image, title) in zip(axes, panels):
-        for config in (1, 2, 4):
-            cells = summary[(summary["image"] == image) & (summary["config"] == config)]
-            cells = cells.sort_values("rate_mbit")
-            if cells.empty:
-                continue
-
-            xs = list(cells["rate_mbit"])
-            medians = list(cells["cold_median_s"])
-            ax.fill_between(xs, list(cells["cold_min_s"]), list(cells["cold_max_s"]),
-                            color=CONFIG_COLORS[config], alpha=0.15, linewidth=0)
-            ax.plot(xs, medians, color=CONFIG_COLORS[config], marker="o",
-                    markersize=3.5, linewidth=1.6,
-                    label=CONFIG_LABELS[config] if image == panels[0][0] else None)
-
-            # the warm floor of the cached configuration, the fastest a pod can
-            # start once nothing has to be fetched at all
-            if config == 4:
-                ax.axhline(cells["warm_median_s"].median(), color=CONFIG_COLORS[4],
-                           linestyle="--", linewidth=1.0)
-
-        ax.set_xscale("log")
-        ax.set_xticks(rates)
-        ax.set_xticklabels([str(rate) for rate in rates], fontsize=7)
-        ax.minorticks_off()
-        ax.set_title(title, fontsize=9)
-        ax.set_xlabel("Registry egress rate (Mbit/s)")
-
-    axes[0].set_ylabel("Scale-out cold start (s)")
-    fig.legend(loc="upper center", ncol=3, fontsize=8, bbox_to_anchor=(0.5, 1.06))
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(os.path.join(OUT, "eval_bandwidth_sweep.pdf"), bbox_inches="tight")
-    plt.close(fig)
+# Where the same-session one-pod and two-pod pair is drawn, just left of the
+# zero-delay points so it does not sit on top of them
+REPLICA_TICK_MS = -4
 
 
 def envelope():
@@ -426,9 +265,11 @@ def envelope():
 
     # right panel: cold start against round-trip time at 600 Mbit/s, two
     # cold pods scaling out together, both replicas pulling at once -- the
-    # eager, netem and anchor cells. Every point on every line is two-pod;
-    # the single-pod solo cell for the same rate is drawn as a faint marker
-    # at 0 ms only, to show what the second replica itself costs
+    # eager, netem and anchor cells. Every point on every line is two-pod.
+    # Just left of 0 ms sits a separate measurement in which one pod and two
+    # pods ran back to back in the same session, so its tick is the cost of
+    # the second replica without a difference between sessions
+    replicas = pd.read_csv(os.path.join(SUMMARIES, "replica-summary.csv"))
     second_pod_tax = {1: [], 4: []}
     for image, image_label, style in images:
         curves = {}
@@ -449,19 +290,21 @@ def envelope():
                 ax_rtt.plot(xs, ys, linestyle=style, marker="o", markersize=3.5,
                             linewidth=1.6, color=CONFIG_COLORS[config])
 
-            # the single-pod reference at the same rate, drawn faint and
-            # hollow so the two-pod line stays the thing the eye follows
-            solo = summary[(summary["image"] == image) & (summary["campaign"] == "solo")
-                           & (summary["config"] == config) & (summary["rate_mbit"] == 600)]
-            zero_two_pod = dict(curves[config]).get(0.0)
-            if not solo.empty and zero_two_pod is not None:
-                solo_value = float(solo["cold_fast_s"].iloc[0])
-                ax_rtt.plot([0], [solo_value], marker="o", markersize=3.5,
+            # the same-session pair, drawn faint so the two-pod line stays
+            # the thing the eye follows: hollow for one pod, filled for two
+            pair = replicas[(replicas["image"] == image) & (replicas["config"] == config)]
+            if not pair.empty:
+                solo_value = float(pair["solo_median_s"].iloc[0])
+                pair_value = float(pair["pair_median_s"].iloc[0])
+                ax_rtt.plot([REPLICA_TICK_MS], [solo_value], marker="o", markersize=3.5,
                             markerfacecolor="none", markeredgecolor=CONFIG_COLORS[config],
-                            alpha=0.55, zorder=1)
-                ax_rtt.plot([0, 0], [solo_value, zero_two_pod], color=CONFIG_COLORS[config],
-                           linestyle=":", linewidth=0.9, alpha=0.45, zorder=1)
-                second_pod_tax[config].append(zero_two_pod - solo_value)
+                            alpha=0.6, zorder=1)
+                ax_rtt.plot([REPLICA_TICK_MS], [pair_value], marker="o", markersize=2.5,
+                            color=CONFIG_COLORS[config], alpha=0.6, zorder=1)
+                ax_rtt.plot([REPLICA_TICK_MS, REPLICA_TICK_MS], [solo_value, pair_value],
+                            color=CONFIG_COLORS[config], linestyle=":", linewidth=0.9,
+                            alpha=0.5, zorder=1)
+                second_pod_tax[config].append(float(pair["second_replica_cost_s"].iloc[0]))
 
         # the final gap between the two lines, so the reader has a number
         # for how far ahead the cache still is once both curves reach 80 ms
@@ -473,14 +316,18 @@ def envelope():
                             xytext=(4, 4), textcoords="offset points",
                             fontsize=6.5, color="#333333")
 
+    ax_rtt.set_xlim(left=REPLICA_TICK_MS - 3)
     ax_rtt.set_xlabel("Registry round-trip time (ms) -- two cold pods scaling out\n"
-                      "together at 600 Mbit/s (faint marker at 0 ms: the same cell, one pod)")
+                      "together at 600 Mbit/s (ticks left of 0 ms: one pod against two)")
     ax_rtt.set_ylabel("Cold start (s)")
-    ax_rtt.set_title("The cache leads throughout, and pays far less for the second pod",
+    ax_rtt.set_title("The cache leads throughout, and pays less for the second pod",
                      fontsize=9)
-    tax_text = (f"cost of the second pod at 0 ms:\n"
-               f"eager +{min(second_pod_tax[1]):.1f} to +{max(second_pod_tax[1]):.1f} s\n"
-               f"cache +{min(second_pod_tax[4]):.1f} to +{max(second_pod_tax[4]):.1f} s")
+    # rounded first, so a cost of -0.005 s prints as 0.0 rather than -0.0
+    costs = {config: [round(value, 1) + 0.0 for value in values]
+             for config, values in second_pod_tax.items()}
+    tax_text = (f"cost of the second pod at 0 ms (means, one session):\n"
+               f"eager {min(costs[1]):.1f} to {max(costs[1]):.1f} s\n"
+               f"cache {min(costs[4]):.1f} to {max(costs[4]):.1f} s")
     # placed in the empty band between the pytorch and springboot curves and
     # clear of the zero-delay markers, since the bottom right corner belongs
     # to the python-hello lines
@@ -560,71 +407,6 @@ def floor_decomposition():
     plt.close(fig)
 
 
-SIMULATION = os.path.join(
-    os.path.dirname(__file__),
-    "../../../analysis/results/simulation",
-)
-
-
-def node_scaling():
-    """Cold start against cluster size, for the two images swept.
-
-    A figure earns its place here because the finding is three different
-    shapes rather than three numbers: one line climbs with the node count, one
-    is flat, and one is nearly flat. The table keeps the pull times and the
-    ratios, which are read rather than seen.
-    """
-    images = [
-        ("fn-python-hello", "fn-python-hello", [2, 3, 5, 7]),
-        ("fn-python-ml", "fn-python-ml", [3, 7]),
-    ]
-    fig, axes = plt.subplots(1, 2, figsize=(6.6, 2.9), sharey=True)
-
-    for ax, (image, title, counts) in zip(axes, images):
-        for config in (1, 2, 4):
-            xs, ys = [], []
-            for n in counts:
-                frame = load_cell(f"node-sweep", config, f"{image}-n{n}-rtt80ms")
-                if frame is None:
-                    continue
-                cold = frame[(frame["phase"] == "scaleout") & (frame["warm"] == "no")]
-                if cold.empty:
-                    continue
-                xs.append(n)
-                ys.append(cold["ready_seconds"].mean())
-            if not xs:
-                continue
-            ax.plot(xs, ys, marker="o", markersize=5, linewidth=2,
-                    color=CONFIG_COLORS[config], label=CONFIG_LABELS[config])
-            # direct label at the right end, which also discharges the
-            # contrast warning on the lighter of the three hues
-            ax.annotate(f"config {config}", (xs[-1], ys[-1]),
-                        textcoords="offset points", xytext=(6, 0),
-                        fontsize=7, color="#333333", va="center")
-
-        ax.set_title(title, fontsize=9)
-        ax.set_xlabel("Nodes cold-starting together")
-        ax.set_xticks(counts)
-        ax.set_xlim(min(counts) - 0.4, max(counts) + 1.6)
-
-    axes[0].set_ylabel("Cold start (s)")
-    # a log scale is what makes three curves an order of magnitude apart
-    # readable in one panel; the minor ticks are silenced so the axis reads as
-    # seconds rather than as powers
-    axes[0].set_yscale("log")
-    axes[0].set_yticks([4, 6, 10, 20, 40])
-    axes[0].set_yticklabels(["4", "6", "10", "20", "40"])
-    axes[0].yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
-
-    handles = [Line2D([], [], color=CONFIG_COLORS[c], linewidth=2, label=CONFIG_LABELS[c])
-               for c in (1, 2, 4)]
-    fig.legend(handles=handles, fontsize=7, ncol=3, loc="lower center",
-               bbox_to_anchor=(0.5, -0.06))
-    fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "eval_node_scaling.pdf"), bbox_inches="tight")
-    plt.close(fig)
-
-
 def cache_ceiling():
     """Throughput and tail latency of the cache pod against concurrency.
 
@@ -669,79 +451,14 @@ def cache_ceiling():
     plt.close(fig)
 
 
-def invocation_latency():
-    """Response-time distribution over the replayed week, cached and not.
-
-    This is the one result that a table genuinely cannot carry: the finding is
-    *where* the two distributions start to separate, and a handful of quantile
-    columns cannot show a crossing point.
-    """
-    path = os.path.join(SIMULATION, "latency-replay.csv")
-    if not os.path.exists(path):
-        return
-    data = pd.read_csv(path)
-    churn = data[(data["catalog"] == "n100-e6") & (data["keepalive_ms"] == 60000)]
-    if churn.empty:
-        return
-
-    quantiles = [0.50, 0.95, 0.99, 0.999, 0.9999]
-    columns = ["p50_ms", "p95_ms", "p99_ms", "p999_ms", "p9999_ms"]
-    # plotted against the tail depth 1/(1-q), so each decade of rarity is one
-    # equal step and the divergence point is legible
-    depth = [1 / (1 - q) for q in quantiles]
-
-    styles = {"yes": ("#009e73", "with cluster cache"),
-              "no": ("#e69f00", "without cluster cache")}
-
-    fig, ax = plt.subplots(figsize=(4.6, 2.9))
-    # the two curves coincide over most of their length, which is the result;
-    # the uncached one is drawn wider underneath so it stays visible as a
-    # fringe rather than being hidden by the line on top of it
-    widths = {"no": 4.0, "yes": 2.0}
-    for flag in ("no", "yes"):
-        row = churn[churn["cluster_cache"] == flag]
-        if row.empty:
-            continue
-        color, label = styles[flag]
-        ax.plot(depth, [row.iloc[0][c] for c in columns], marker="o",
-                markersize=4.5, linewidth=widths[flag], color=color,
-                label=label, solid_capstyle="round")
-
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xticks(depth)
-    ax.set_xticklabels(["p50", "p95", "p99", "p99.9", "p99.99"], fontsize=7.5)
-    ax.set_xlabel("Quantile of invocation response time")
-    ax.set_ylabel("Response time (ms)")
-    ax.get_yaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
-    ax.set_yticks([10, 100, 1000, 10000, 100000])
-
-    # the share of invocations that wait on a cold start at all, which is what
-    # keeps the two curves together until the far right
-    ax.axvline(1 / 0.000692, color="#999999", linewidth=1, linestyle=":")
-    ax.annotate("0.07 % of invocations\ncold-start", (1 / 0.000692, 20),
-                fontsize=6.5, color="#666666", ha="right",
-                textcoords="offset points", xytext=(-4, 0))
-
-    ax.legend(fontsize=7, loc="upper left")
-    fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "eval_invocation_latency.pdf"), bbox_inches="tight")
-    plt.close(fig)
-
-
 # bandwidth_sweep is deliberately absent: the thesis no longer includes that
 # figure, and calling it here would only leave an unused file behind
 def main():
     cold_by_config()
-    ladder_by_config()
-    distance_anchors()
     distance_sweep()
-    crossimage_reuse()
     envelope()
     floor_decomposition()
-    node_scaling()
     cache_ceiling()
-    invocation_latency()
     print("figures written to", OUT)
 
 

@@ -5,44 +5,41 @@ import (
 	"io"
 )
 
-// ErrNotFound is returned by Get when no chunk is associated with the hash
+// Returned by Get function when no chunk with the hash was found/stored yet
 var ErrNotFound = errors.New("chunk not found")
 
-// Store is the byte-level persistence contract used by the cache facade.
-// Implementations must be safe for concurrent use.
+// Underlying layer of the cluster cache for storing the actual bytes of a chunk
+// => This layer is not responsible for cache metrics or eviction strats
 type Store interface {
-	// Get returns a reader for the chunk identified by hash, or ErrNotFound
-	// Callers must close the reader when finished
+
+	// Returns a reader for the bytes stored under hash, or ErrNotFound if no such chunk exists
+	// Note: Apparently returning a reader is the best practice (?) because it allows the caller to stream the data instead of reading it all into memory at once
 	Get(hash string) (io.ReadCloser, error)
 
-	// Put stores the bytes from payload under hash; overwriting an existing hash
-	// is allowed and replaces the previous payload atomically from the
-	// reader's point of view
+	// Writes a chunk (overwriting allowed) and the readers of the chunk will see either the old or the new payload, but never a mix of both
 	Put(hash string, payload io.Reader) error
 
-	// Exists reports whether the chunk is currently stored, without reading bytes
+	// Returns whether a chunk with a given hash exist or not, but it does not read any bytes
 	Exists(hash string) bool
 
-	// Delete removes a chunk; returns nil if the chunk did not exist
+	// Removes a chunk or returns nil if the chunk did not exist
 	Delete(hash string) error
 
-	// StoredBytes reports the total number of payload bytes currently held
+	// Returns the total number of bytes currently held in the store
 	StoredBytes() uint64
 
-	// ChunkCount reports the number of distinct chunks currently held
+	// Returns the number of unique chunks currently in the store
 	ChunkCount() int
 }
 
-// ChunkInfo names one stored chunk and the size of its payload.
+// A single chunk info object returned by the Lister interface
 type ChunkInfo struct {
 	Hash  string `json:"hash"`
 	Bytes uint64 `json:"size"`
 }
 
-// Lister is implemented by stores that can enumerate what they hold.
-// It backs the debug listing used to capture which chunks a cold start
-// actually touched, and stays separate from Store so a backend that cannot
-// enumerate cheaply is not forced to.
+// Interface to allow returning a list of all chunks currently in the store
+// => This is mandatory for determining which chunks are used e.g. during cold starts when we isolate to one pod and a clean store
 type Lister interface {
 	Chunks() []ChunkInfo
 }

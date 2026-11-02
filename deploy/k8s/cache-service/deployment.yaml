@@ -1,3 +1,4 @@
+# Cluster cache deployment (with Prometheus)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,6 +34,7 @@ spec:
             - "--listen=:8080"
             - "--store=memory"
             - "--capacity-bytes=3221225472"
+            - "--check-digests=true"
           env:
             - name: GOMEMLIMIT
               value: "4500MiB"

@@ -15,13 +15,15 @@ import re
 
 import pandas as pd
 
+from cell_bootstrap import mean_interval, repetition_groups
+
 BENCH = os.path.join(os.path.dirname(__file__), "../analysis/results/benchmarks")
 SUMMARIES = os.path.join(os.path.dirname(__file__), "../analysis/results/summaries")
 
 
 def cell_pattern(prefix):
     return re.compile(
-        rf"{re.escape(prefix)}-config(?P<config>\d)-(?P<image>fn-[a-z-]+)"
+        rf"{re.escape(prefix)}-config(?P<config>\d+s?)-(?P<image>fn-[a-z-]+)"
         r"-rtt(?P<rtt>\d+)ms-rate(?P<rate>[a-z0-9]+)-\d{8}T\d{6}\.csv$"
     )
 
@@ -30,6 +32,9 @@ def cell_stats(frame):
     cold = frame[(frame["phase"] == "scaleout") & (frame["warm"] == "no")]["ready_seconds"]
     warm = frame[(frame["phase"] == "scaleout") & (frame["warm"] == "yes")]["ready_seconds"]
     seed = frame[frame["phase"] == "seed"]["ready_seconds"]
+    cold_frame = frame[(frame["phase"] == "scaleout") & (frame["warm"] == "no")]
+    cold_low, cold_high = mean_interval(repetition_groups(cold_frame))
+    seed_low, seed_high = mean_interval(seed)
     return {
         "cold_median_s": round(cold.median(), 3),
         # the published headline table reports means, so both live here and a
@@ -38,12 +43,34 @@ def cell_stats(frame):
         "cold_min_s": round(cold.min(), 3),
         "cold_max_s": round(cold.max(), 3),
         "cold_n": len(cold),
+        # 95 percent bootstrap interval of the cold mean over the cell's repetitions
+        "cold_ci_low_s": round(cold_low, 3),
+        "cold_ci_high_s": round(cold_high, 3),
         "warm_median_s": round(warm.median(), 3),
         "warm_mean_s": round(warm.mean(), 3),
         "warm_n": len(warm),
         "seed_median_s": round(seed.median(), 3),
         "seed_mean_s": round(seed.mean(), 3),
+        "seed_ci_low_s": round(seed_low, 3),
+        "seed_ci_high_s": round(seed_high, 3),
         "above_floor_mean_s": round(cold.mean() - warm.mean(), 3),
+        **dropped_packets(frame),
+    }
+
+
+# Packets the emulated link dropped, summed over the repetitions of a cell.
+# Every scale-out row of a repetition carries that phase's count, so it is
+# taken once per repetition. Cells recorded before the counter existed have
+# no such column and report nothing
+def dropped_packets(frame):
+    if "netem_dropped" not in frame.columns:
+        return {}
+    seed = frame[frame["phase"] == "seed"]["netem_dropped"]
+    scaleout = frame[frame["phase"] == "scaleout"].drop_duplicates("rep")["netem_dropped"]
+    return {
+        "netem_dropped_seed": int(seed.sum()),
+        "netem_dropped_scaleout": int(scaleout.sum()),
+        "netem_dropped_scaleout_max": int(scaleout.max()),
     }
 
 
@@ -68,7 +95,7 @@ def main():
         if not match:
             continue
         rows.append({
-            "config": int(match["config"]),
+            "config": match["config"],
             "image": match["image"],
             "rtt_ms": int(match["rtt"]),
             "rate": match["rate"],

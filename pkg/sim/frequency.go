@@ -2,33 +2,33 @@ package sim
 
 import "strconv"
 
-// ClassCount is how many invocation-frequency classes an app can fall in
+// Order the simulated apps into six groups/classes based on how frequent they were called
+// during the simulation, so we can make results based on frequency groups.
+// Each class is roughly ten times busier/more frequently called than the ones in the group below
 const ClassCount = 6
 
-// ClassBounds are the inclusive upper bounds of the first five classes in
-// invocations per replayed window; decades, so a week's mean inter-arrival
-// runs from under six seconds in the top class to over sixteen hours in
-// the bottom one
+// Frequency classes, that marks the boundaries of each, e.g. an app with 1001 is in the <= 10000 group,
+// while we only have only 5 groups with cut-offs, since everything above the 100000 group is automatically in the last one
 var ClassBounds = [ClassCount - 1]int{10, 100, 1000, 10000, 100000}
 
-// ClassOf returns the frequency class of an app with the given invocation
-// count over the replayed window.
-func ClassOf(count int) int {
+// Based on how many times a app was called, this function returns in which group it lands
+func ClassOf(appCallCount int) int {
 	for class, bound := range ClassBounds {
-		if count <= bound {
+		if appCallCount <= bound {
 			return class
 		}
 	}
 	return ClassCount - 1
 }
 
-// ClassLabel names a class the way the result tables print it.
-func ClassLabel(class int) string {
-	if class == 0 {
+// Helper function for printing the range of the specific class
+// => class = 3, returns "1001-10000"
+func ClassLabel(classNumber int) string {
+	if classNumber == 0 {
 		return "<=" + strconv.Itoa(ClassBounds[0])
 	}
-	if class >= ClassCount-1 {
+	if classNumber >= ClassCount-1 {
 		return ">" + strconv.Itoa(ClassBounds[ClassCount-2])
 	}
-	return strconv.Itoa(ClassBounds[class-1]+1) + "-" + strconv.Itoa(ClassBounds[class])
+	return strconv.Itoa(ClassBounds[classNumber-1]+1) + "-" + strconv.Itoa(ClassBounds[classNumber])
 }

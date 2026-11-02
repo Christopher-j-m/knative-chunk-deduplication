@@ -1,3 +1,5 @@
+// Changes needed for the nydus snapshotter to allow http-proxy as allowed image
+// TODO: If there has to be more changes we need a proper fork, until then just go with git apply
 diff --git a/config/daemonconfig/daemonconfig.go b/config/daemonconfig/daemonconfig.go
 index f515185..d669049 100644
 --- a/config/daemonconfig/daemonconfig.go

@@ -1,10 +1,4 @@
-# AKS variant of deploy/k8s/chunk-proxy/daemonset.yaml. Differences: ACR
-# image + https registry, cache ClusterIP from the AKS service CIDR, and the
-# nydus store at /var/lib/containerd-nydus (plain ext4 on AKS nodes; the k3s
-# btrfs relocation does not apply).
-#
-# RUN-TIME NOTE: scripts/config-switch-aks.sh patches containers/0/args/1 —
-# keep --cache-enabled as the SECOND argument of the FIRST container.
+# Cluster cache chunk proxy daemon that runs on each cluster node
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -24,7 +18,7 @@ spec:
       hostNetwork: true
       containers:
         - name: chunk-proxy
-          image: __ACR__/chunk-proxy:0.1.0
+          image: __ACR__/chunk-proxy:0.2.1
           imagePullPolicy: Always
           args:
             - "--listen=127.0.0.1:18000"
@@ -32,18 +26,9 @@ spec:
             - "--cache-endpoint=http://10.0.0.50:8080"
             - "--registry=https://__ACR__"
             - "--bootstrap-dir=/var/lib/containerd-nydus/snapshots"
-            # Benchmark posture: the breaker exists to shed a genuinely dead
-            # cache, but during measurements a brief endpoint blip right
-            # after a reset would silently reroute whole runs to the
-            # registry and make the cache look useless, so the breaker is
-            # effectively disabled and the per-request deadline is generous
+            # Set it high enough to not pollute results by skipping the cluster cache if theres a brief downtime => most likely due to a reset that would send the whole run to the remote cache instead
             - "--breaker-threshold=1000000"
             - "--cache-timeout=500ms"
-          # The proxy binds loopback only, so the probes must dial
-          # 127.0.0.1 explicitly: with hostNetwork the default probe
-          # target is the node address, where nothing listens. Readiness
-          # makes a DaemonSet rollout mean "accepting connections", and
-          # liveness replaces a proxy that wedged without exiting
           readinessProbe:
             tcpSocket: { host: 127.0.0.1, port: 18000 }
             initialDelaySeconds: 1

@@ -8,42 +8,51 @@ import (
 	"sort"
 )
 
-// FlattenImage concatenates all regular file contents in sorted path order into a single byte stream,
-// then chunks the entire stream at fixed boundaries without resetting between files.
-// This means a single chunk can span multiple files, which lets identical content be shared even when file boundaries shift.
+// Flatten a image directory by first joining all files into a byte stream before splitting into fixed size chunks as specified
 func FlattenImage(exportDir string, chunkSize int, imageName string) ([]ChunkInfo, error) {
-	var paths []string
-	err := filepath.WalkDir(exportDir, func(path string, d fs.DirEntry, err error) error {
+
+	// Walk along the exported image directory and collect all non-empty file paths
+	var allPaths []string
+	err := filepath.WalkDir(exportDir, func(path string, currDirEntry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.Type().IsRegular() {
-			info, err := d.Info()
+
+		// Skip if not a file
+		if currDirEntry.Type().IsRegular() {
+			// Get file info to check size
+			info, err := currDirEntry.Info()
 			if err != nil {
 				return err
 			}
+
+			// Only include non-empty files
 			if info.Size() > 0 {
-				paths = append(paths, path)
+				allPaths = append(allPaths, path)
 			}
 		}
 		return nil
 	})
+
 	if err != nil {
-		return nil, fmt.Errorf("walk export dir: %w", err)
+		return nil, fmt.Errorf("error during walking the export dir: %w", err)
 	}
 
-	sort.Strings(paths)
+	// Sort the file paths by name to ensure same order in every run
+	sort.Strings(allPaths)
 
-	// Concatenate all file contents into single continuous stream
+	// Concatenate all file content into single byte stream
 	var stream []byte
-	for _, path := range paths {
+	for _, path := range allPaths {
 		data, err := os.ReadFile(path)
+
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", path, err)
+			return nil, fmt.Errorf("error while reading path %s: %w", path, err)
 		}
+
 		stream = append(stream, data...)
 	}
 
-	// Chunk the entire stream at fixed boundaries
+	// Chunk the file stream at fixed sized chunks
 	return FixedChunk(stream, chunkSize, imageName), nil
 }

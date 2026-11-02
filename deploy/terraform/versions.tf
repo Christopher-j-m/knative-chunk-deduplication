@@ -3,11 +3,16 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+      version = "~> 5.11"
     }
   }
 }
 
 provider "azurerm" {
+  resource_providers_to_register = [
+    "Microsoft.ContainerService",
+    "Microsoft.ContainerRegistry",
+  ]
+
   features {}
 }

@@ -2,33 +2,27 @@ package sim
 
 import "fmt"
 
-// Config sets the cluster shape and pod lifecycle parameters for one run.
-// A nonzero TimelineBucketMs additionally records cumulative fetch totals
-// once per bucket of simulated time.
+// Orchestrator of the cache simulation who decides for each function call where it gets placed, what image data is
+// already available and where the remaining ones come from
+
+// Configuration for the simulated run
 type Config struct {
-	Nodes            int
-	CapacityBytes    uint64
-	KeepAliveMs      int64
-	Concurrency      int
-	Seed             int64
-	TimelineBucketMs int64
+	Nodes            int    // how many nodes the simulated cluster has
+	CapacityBytes    uint64 // capacity of the cluster cache
+	KeepAliveMs      int64  // time until an unused pod can be idle before it gets terminated
+	Concurrency      int    // amount of function calls a single pod can accept at the same time
+	Seed             int64  // seed for the random generator so we get predictable node selection for random selection
+	TimelineBucketMs int64  // interval at which we record the total download size up to this simulated point of time
 
-	// which node a cold-starting pod lands on; empty means packed
-	Placement string
+	Placement string // placement strategy (packed, or random allowed) for pod selection
 
-	// With a cost model set, a cold-starting pod is unready until its startup
-	// has elapsed and arrivals queue behind it, which is what turns the fetch
-	// accounting into a response time. Leaving it nil keeps the fetch
-	// accounting reproducible without one
-	Cost *CostModel
-
-	// NoClusterCache models the uncached configuration, which keeps Nydus's
-	// node-local chunk cache but has no cluster tier, so a chunk another node
-	// already fetched is of no use to this one
-	NoClusterCache bool
+	// simulator for estimating costs (latency)caused by fetching chunks from local cache, cluster cache or remote registry
+	// without it, we just count how many data came from which source without any latency estimations
+	Cost           *CostModel
+	NoClusterCache bool // whether we simulate as if there's no cluster cache (and going to the remote registry instead)
 }
 
-// TimelinePoint is a running fetch total at the end of one time bucket
+// One point in time/snapshot of what we had to download so far from which source
 type TimelinePoint struct {
 	AtMs            int64
 	RegistryBytes   uint64
@@ -36,9 +30,8 @@ type TimelinePoint struct {
 	LocalBytes      uint64
 }
 
-// ClassStats is the accounting for every app in one invocation-frequency
-// class, which is how the study separates what the cache does for rarely
-// invoked functions from what it does for busy ones.
+// finer grained metrics for grouping functions by frequency class/bucket
+// up to 10 calls, 11–100, 101–1000, 1001–10000, 10001–100000, and above 100000
 type ClassStats struct {
 	Apps          int
 	Invocations   int
@@ -47,78 +40,72 @@ type ClassStats struct {
 	CacheBytes    uint64
 	RegistryBytes uint64
 
-	// startup delay of every cold start and response time of every
-	// invocation in the class, recorded only with a cost model set
+	// only when a cost model simulation is set in config
+	// cold start latency and function response time during every invocation from function call until it finishes
 	ColdLatency *Latency
 	Response    *Latency
 }
 
-// Result aggregates what one replay run observed.
+// Aggregated results of the simulated run
 type Result struct {
-	Invocations     int
-	ColdStarts      int
-	SeedColdStarts  int
-	WarmStarts      int
-	LocalBytes      uint64
-	ClusterHitBytes uint64
-	RegistryBytes   uint64
-	Evictions       int
-	PeakStoredBytes uint64
-	Timeline        []TimelinePoint
-
-	// per-class chunk counts, which the cost model charges at different rates
-	LocalChunks    int
-	CacheChunks    int
-	RegistryChunks int
-
-	// how many nodes ever hosted a pod, which shows where packed placement
-	// stops using the cluster
-	NodesUsed int
-
-	// the most chunk requests the cluster cache saw in one simulated second,
-	// to be read against the measured serving ceiling
-	PeakCacheRPS int
-
-	// response time of every invocation and startup delay of every cold
-	// start, recorded only with a cost model set
-	Latency     *Latency
-	ColdLatency *Latency
-
-	Classes [ClassCount]ClassStats
+	Invocations     int             // amount of function invocations
+	ColdStarts      int             // function calls that started a new pod
+	SeedColdStarts  int             // amount of cold starts of an image anywhere in the cluster
+	WarmStarts      int             // function calls that an existing pod already handled
+	LocalBytes      uint64          // bytes already present on the node local cache
+	ClusterHitBytes uint64          // bytes fetched successfully from the cluster cache
+	RegistryBytes   uint64          // ... from the remote registry
+	Evictions       int             // amount of chunks that got evicted from the cluster cache
+	PeakStoredBytes uint64          // the maximum amount of chunks (in bytes) the cluster cache held at some point
+	Timeline        []TimelinePoint // list of TimeLinePoint snapshots
+	LocalChunks     int             // image chunks fetched from the node local cache
+	CacheChunks     int             // ...from the cluster cache
+	RegistryChunks  int             // ...from the remote registry
+	NodesUsed       int             // how many nodes ran atleast one pod over the time of the simulation
+	PeakCacheRPS    int             // the maximum amount of chunk requests that the cluster cache received in any simulated second
+	Latency         *Latency        // response times for every function invocation
+	ColdLatency     *Latency        // cold start times of every new pod
+	Classes         [ClassCount]ClassStats
 }
 
-// RegistryRequests is how many chunk fetches reached the registry.
-func (r Result) RegistryRequests() int { return r.RegistryChunks }
+// returns the amount of chunks that got fetched from the remote registry
+func (res Result) RegistryRequests() int {
+	return res.RegistryChunks
+}
 
+// state for each pod
 type pod struct {
-	node      int
-	readyAt   int64
-	busyUntil []int64
-	idleSince int64
+	node      int     // node id this pod is running on
+	readyAt   int64   // simulated time of the pod until its ready
+	busyUntil []int64 // end times of each function call on this pod
+	idleSince int64   // the time of the last time this pod successfully finished a function call
 }
 
+// all running pods for a single function
 type appState struct {
 	pods []*pod
 }
 
-// latencyCeilingMs is two minutes, which covers every cold start the
-// measured cells produce; a slower one reports at the ceiling
 const latencyCeilingMs = 120000
 
-// Simulate replays the invocations against a modeled cluster and returns the
-// aggregate fetch accounting. It is single-threaded and deterministic.
-func Simulate(cfg Config, catalog *Catalog, assign []int32, trace *Trace, policy Policy) (Result, error) {
+// main function to perform the simulation of traces against a simulated cluster
+func Simulate(cfg Config, imageCatalog *Catalog, assign []int32, trace *Trace, policy Policy) (Result, error) {
+
+	/* Input validation */
 	if cfg.Nodes < 1 || cfg.Concurrency < 1 {
-		return Result{}, fmt.Errorf("config needs at least one node and slot")
+		return Result{}, fmt.Errorf("error: config needs at least one node and slot/concurrency")
 	}
+
 	if len(assign) != len(trace.Apps) {
-		return Result{}, fmt.Errorf("assignment covers %d apps, trace has %d", len(assign), len(trace.Apps))
+		return Result{}, fmt.Errorf("error, the assignment covers %d apps, trace only has %d", len(assign), len(trace.Apps))
 	}
+
 	for app, image := range assign {
-		if image < 0 || int(image) >= len(catalog.Sets) {
-			return Result{}, fmt.Errorf("app %s assigned to image %d, catalog has %d", trace.Apps[app], image, len(catalog.Sets))
+		if image < 0 || int(image) >= len(imageCatalog.Sets) {
+			return Result{}, fmt.Errorf("error: app %s assigned to image %d, but the image catalog only has %d", trace.Apps[app], image, len(imageCatalog.Sets))
 		}
 	}
+
 	placementName := cfg.Placement
 	if placementName == "" {
 		placementName = "packed"
@@ -128,6 +115,7 @@ func Simulate(cfg Config, catalog *Catalog, assign []int32, trace *Trace, policy
 		return Result{}, err
 	}
 
+	// Setup the metric counters
 	var res Result
 	apps := make([]*appState, len(trace.Apps))
 	classOf := make([]int, len(trace.Apps))
@@ -136,25 +124,24 @@ func Simulate(cfg Config, catalog *Catalog, assign []int32, trace *Trace, policy
 		res.Classes[classOf[app]].Apps++
 	}
 
-	// node-local sets are allocated the first time a node hosts a pod, so a
-	// large cluster that packed placement never reaches costs nothing
 	nodeLocal := make([]bitset, cfg.Nodes)
 	podsPerNode := make([]int, cfg.Nodes)
 
-	stored := make([]bool, len(catalog.Sizes))
+	stored := make([]bool, len(imageCatalog.Sizes))
 	var storedBytes uint64
-	imageSeeded := make([]bool, len(catalog.Sets))
+	imageSeeded := make([]bool, len(imageCatalog.Sets))
 
+	// Setup latency cost estimation for this run
 	if cfg.Cost != nil {
 		res.Latency = NewLatency(latencyCeilingMs)
 		res.ColdLatency = NewLatency(latencyCeilingMs)
-		for c := range res.Classes {
-			res.Classes[c].ColdLatency = NewLatency(latencyCeilingMs)
-			res.Classes[c].Response = NewLatency(latencyCeilingMs)
+		for currClass := range res.Classes {
+			res.Classes[currClass].ColdLatency = NewLatency(latencyCeilingMs)
+			res.Classes[currClass].Response = NewLatency(latencyCeilingMs)
 		}
 	}
 
-	// close out a timeline bucket whenever simulated time crosses its edge
+	// set the time when to take the first snapshot of the aggregated metrics (e.g. after first call one bucket length)
 	var bucketEnd int64
 	if cfg.TimelineBucketMs > 0 && len(trace.Invocations) > 0 {
 		bucketEnd = trace.Invocations[0].AtMs + cfg.TimelineBucketMs
@@ -168,8 +155,7 @@ func Simulate(cfg Config, catalog *Catalog, assign []int32, trace *Trace, policy
 		})
 	}
 
-	// cache requests are counted per simulated second; the trace is sorted,
-	// so one running bucket is enough to find the peak
+	// find the second during the simulation in which the cluster cache requests/s peaked
 	var rpsSecond int64 = -1
 	rpsCount := 0
 	countCacheRequests := func(at int64, n int) {
@@ -183,6 +169,7 @@ func Simulate(cfg Config, catalog *Catalog, assign []int32, trace *Trace, policy
 		rpsCount += n
 	}
 
+	// record for a single function call the response time in the frequency-class and overall
 	observe := func(class int, response int64) {
 		if res.Latency == nil {
 			return
@@ -191,60 +178,64 @@ func Simulate(cfg Config, catalog *Catalog, assign []int32, trace *Trace, policy
 		res.Classes[class].Response.Observe(response)
 	}
 
-	for _, inv := range trace.Invocations {
+	// main handler loop for recording function invocations and the corresponding placement on the nodes
+	for _, currFuncInvocation := range trace.Invocations {
+
+		// record snapshot if the timeline in the config is enabled
 		if cfg.TimelineBucketMs > 0 {
-			for inv.AtMs >= bucketEnd {
+			for currFuncInvocation.AtMs >= bucketEnd {
 				snapshot(bucketEnd)
 				bucketEnd += cfg.TimelineBucketMs
 			}
 		}
 		res.Invocations++
-		class := classOf[inv.App]
+		class := classOf[currFuncInvocation.App]
 		res.Classes[class].Invocations++
-		image := assign[inv.App]
-		dur := int64(inv.DurMs)
 
-		state := apps[inv.App]
+		// get the image of the function and how long this runs
+		image := assign[currFuncInvocation.App]
+		dur := int64(currFuncInvocation.DurMs)
+
+		// create a new record for this function (if first time function call)
+		state := apps[currFuncInvocation.App]
 		if state == nil {
 			state = &appState{}
-			apps[inv.App] = state
+			apps[currFuncInvocation.App] = state
 		}
 
-		// drop pods that sat idle past the keep-alive window
+		// deletes finished function calls and updates the idle time from anew
 		alive := state.pods[:0]
-		for _, p := range state.pods {
-			p.reap(inv.AtMs)
-			if inv.AtMs < p.readyAt {
-				alive = append(alive, p)
+		for _, currPod := range state.pods {
+			currPod.reap(currFuncInvocation.AtMs)
+			if currFuncInvocation.AtMs < currPod.readyAt {
+				alive = append(alive, currPod)
 				continue
 			}
-			if len(p.busyUntil) == 0 && inv.AtMs-p.idleSince > cfg.KeepAliveMs {
-				podsPerNode[p.node]--
+			if len(currPod.busyUntil) == 0 && currFuncInvocation.AtMs-currPod.idleSince > cfg.KeepAliveMs {
+				podsPerNode[currPod.node]--
 				continue
 			}
-			alive = append(alive, p)
+			alive = append(alive, currPod)
 		}
 		state.pods = alive
 
-		// warm path: any pod with a free slot takes the invocation. A pod that
-		// is still starting holds the request instead of serving it, which is
-		// what the platform's activator does, so the wait counts toward the
-		// requester's latency
-		if p := freeSlot(state.pods, cfg.Concurrency); p != nil {
-			begin := inv.AtMs
-			if p.readyAt > begin {
-				begin = p.readyAt
+		// check if any of the existing function pods has a free slot (see concurrency config), that pod gets this function call
+		// => the warm path
+		if availablePod := freeSlot(state.pods, cfg.Concurrency); availablePod != nil {
+			begin := currFuncInvocation.AtMs
+			if availablePod.readyAt > begin {
+				begin = availablePod.readyAt
 			}
-			p.busyUntil = append(p.busyUntil, begin+dur)
+			availablePod.busyUntil = append(availablePod.busyUntil, begin+dur)
 			res.WarmStarts++
-			observe(class, begin-inv.AtMs+dur)
+			observe(class, begin-currFuncInvocation.AtMs+dur)
 			continue
 		}
 
-		// cold path: place a new pod
+		// ...else cold path with creating a new pod for this function invocation
 		node := placement.Place(podsPerNode)
 		if nodeLocal[node] == nil {
-			nodeLocal[node] = newBitset(len(catalog.Sizes))
+			nodeLocal[node] = newBitset(len(imageCatalog.Sizes))
 			res.NodesUsed++
 		}
 		podsPerNode[node]++
@@ -257,22 +248,27 @@ func Simulate(cfg Config, catalog *Catalog, assign []int32, trace *Trace, policy
 			res.SeedColdStarts++
 		}
 
-		// walk the working set and account for where each chunk comes from
+		// check for every image chunk if it is already availe in node local cache -> cluster cache -> remote registry
 		var counts FetchCounts
 		local := nodeLocal[node]
 		stats := &res.Classes[class]
-		for _, id := range catalog.Sets[image] {
-			size := catalog.Sizes[id]
+		for _, id := range imageCatalog.Sets[image] {
+			size := imageCatalog.Sizes[id]
 			switch {
+			// node local cache
 			case local.has(id):
 				res.LocalBytes += size
 				stats.LocalBytes += size
 				counts.LocalChunks++
+
+			// cluster cache
 			case !cfg.NoClusterCache && stored[id]:
 				res.ClusterHitBytes += size
 				stats.CacheBytes += size
 				counts.CacheChunks++
 				policy.OnHit(id)
+
+			// remote registry
 			default:
 				res.RegistryBytes += size
 				stats.RegistryBytes += size
@@ -293,49 +289,55 @@ func Simulate(cfg Config, catalog *Catalog, assign []int32, trace *Trace, policy
 			}
 			local.set(id)
 		}
+
+		// update metrics regarding where we got each chunk
 		res.LocalChunks += counts.LocalChunks
 		res.CacheChunks += counts.CacheChunks
 		res.RegistryChunks += counts.RegistryChunks
-		countCacheRequests(inv.AtMs, counts.CacheChunks)
+		countCacheRequests(currFuncInvocation.AtMs, counts.CacheChunks)
 
-		// the fetch accounting above is what the startup cost is charged on,
-		// so the pod's readiness can only be set once the walk is done
+		// estimate the latency costs based on where we got each missing chunk from
+		// e.g. remote registry costly, while node local cache very cheap and low latency
 		var startup int64
 		if cfg.Cost != nil {
 			startup = cfg.Cost.StartupMs(image, counts)
 			res.ColdLatency.Observe(startup)
 			stats.ColdLatency.Observe(startup)
 		}
-		newPod.readyAt = inv.AtMs + startup
+		newPod.readyAt = currFuncInvocation.AtMs + startup
 		newPod.busyUntil = []int64{newPod.readyAt + dur}
 		observe(class, startup+dur)
 		if storedBytes > res.PeakStoredBytes {
 			res.PeakStoredBytes = storedBytes
 		}
 	}
+
+	// check if we peaked during the simulated second now that all calls are done...
 	if rpsCount > res.PeakCacheRPS {
 		res.PeakCacheRPS = rpsCount
 	}
+
+	// save a snapshot to the timeline for this simulated second
 	if cfg.TimelineBucketMs > 0 && len(trace.Invocations) > 0 {
 		snapshot(bucketEnd)
 	}
 	return res, nil
 }
 
-// reap clears finished slots and stamps when the pod went idle
-func (p *pod) reap(now int64) {
-	busy := p.busyUntil[:0]
-	for _, until := range p.busyUntil {
+// cleanup function to delete a pods slots if the last function call exceeded the allowed idle time
+func (reapingPod *pod) reap(now int64) {
+	busy := reapingPod.busyUntil[:0]
+	for _, until := range reapingPod.busyUntil {
 		if until > now {
 			busy = append(busy, until)
-		} else if until > p.idleSince {
-			p.idleSince = until
+		} else if until > reapingPod.idleSince {
+			reapingPod.idleSince = until
 		}
 	}
-	p.busyUntil = busy
+	reapingPod.busyUntil = busy
 }
 
-// freeSlot returns the first pod that can take one more concurrent invocation
+// returns an available pod for a function that still has slots (slots < config concurrency)
 func freeSlot(pods []*pod, concurrency int) *pod {
 	for _, p := range pods {
 		if len(p.busyUntil) < concurrency {

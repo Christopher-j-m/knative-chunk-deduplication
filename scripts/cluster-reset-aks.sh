@@ -1,50 +1,69 @@
 #!/usr/bin/env bash
+# Resets a aks cluster to cold state after benchmark run
 set -euo pipefail
 
-# AKS twin of scripts/cluster-reset.sh: removes the workload, purges its image
-# from every node, clears the in-memory cache and the node-side nydus
-# blobcaches. Node access goes through the nydus-node-setup DaemonSet.
-# The purge must go through crictl BY IMAGE ID: containerd keeps a bare
-# image-id record (sha256:<config digest>) alongside the tag and digest
-# names, so removing only the names that match the repository leaves the
-# layers and snapshots referenced and the next "cold" pull finishes warm
-# in a tenth of a second. Removing by id drops every name at once and
-# frees the underlying content synchronously.
 ACR="${ACR:?set ACR to the ACR login server}"
 SERVICE="${SERVICE:-fn-python-hello}"
 WORKLOAD_REPO="${WORKLOAD_REPO:-${ACR}/${SERVICE}}"
 
+# Runs a shell cmd on a specific aks node
 nodeexec() {
   kubectl -n kube-system exec "$1" -- nsenter -t 1 -m -p -- sh -c "$2"
 }
 
-echo "Removing the workload so its image can be purged from the nodes"
-kubectl delete ksvc "${SERVICE}" --ignore-not-found --timeout=120s
-kubectl wait --for=delete pod -l "serving.knative.dev/service=${SERVICE}" --timeout=120s 2>/dev/null || true
+# Every function service goes, not only the one under test: a container that
+# still runs an image keeps its unpacked layers alive after the image record is
+# removed, and corpus images share base layers, so any survivor would shorten
+# the next eager pull of a different image.
+#
+# The function containers ignore the polite stop signal, and Knative gives
+# them a grace period of five minutes that the node will not shorten once it
+# has begun, so their pod sandboxes are stopped on the nodes directly
+echo "Removing workloads from all nodes..."
+kubectl delete ksvc --all -n default --wait=false >/dev/null
+for attempt in $(seq 1 60); do
+  # A service deleted moments after it was created can still spawn a pod, so
+  # the services and their deployments must be gone as well as their pods
+  if [[ -z "$(kubectl get ksvc -n default -o name 2>/dev/null)" \
+        && -z "$(kubectl get deploy,pods -n default -l serving.knative.dev/service -o name 2>/dev/null)" ]]; then
+    break
+  fi
+  if (( attempt == 60 )); then
+    echo "function pods are still terminating, so their images cannot be removed" >&2
+    exit 1
+  fi
+  for pod in $(kubectl -n kube-system get pods -l app=nydus-node-setup -o jsonpath='{.items[*].metadata.name}'); do
+    nodeexec "${pod}" '
+      for sandbox in $(crictl pods -q --namespace default --name "^fn-" 2>/dev/null); do
+        crictl stopp "${sandbox}" >/dev/null 2>&1 || true
+      done
+    ' 2>/dev/null || true
+  done
+  sleep 3
+done
 
-echo "Restarting cache-service to clear in-memory contents"
+echo "Restarting cache-service to clear in-memory"
 kubectl rollout restart deploy/nydus-cluster-cache
 kubectl rollout status deploy/nydus-cluster-cache --timeout=120s
 
-echo "Purging workload images and clearing node nydus caches"
+echo "Deleting all images and clearing local nydus caches"
 for pod in $(kubectl -n kube-system get pods -l app=nydus-node-setup -o jsonpath='{.items[*].metadata.name}'); do
-  # A live nydus mount keeps the whole snapshot chain busy, so removing the
-  # image would leave the chain behind and the restarted snapshotter would
-  # revive a daemon over a wiped cache that then serves nothing but read
-  # errors. Unmounting and killing the daemons first lets the image removal
-  # below take the entire chain with it
   nodeexec "${pod}" '
     for m in /var/lib/containerd-nydus/snapshots/*/mnt; do
       umount -f "${m}" 2>/dev/null || true
     done
     pkill -x nydusd 2>/dev/null || true
   ' || true
-  # Purge every corpus image, not only the one being benchmarked: a chain
-  # left behind by another image survives the blobcache wipe below and the
-  # restarted snapshotter would revive its daemon over an empty cache,
-  # which then fails every read on the next repetition. The fn- prefix
-  # spares the chunk-proxy service image, which always runs on every node
-  # and could never be removed anyway
+
+  # A deleted pod can leave its stopped sandbox on the node for minutes, and
+  # that sandbox still holds the image's layers, so stopped sandboxes go first
+  nodeexec "${pod}" '
+    for sandbox in $(crictl pods -q --namespace default --state NotReady 2>/dev/null); do
+      crictl rmp -f "${sandbox}" >/dev/null 2>&1 || true
+    done
+  ' || true
+
+  # Remove all dummy images by their id
   for _ in $(seq 1 12); do
     ids="$(nodeexec "${pod}" "crictl images 2>/dev/null" | awk -v corpus="${ACR}/fn-" 'index($1, corpus) == 1 {print $3}' | sort -u)"
     [[ -z "${ids}" ]] && break
@@ -53,10 +72,31 @@ for pod in $(kubectl -n kube-system get pods -l app=nydus-node-setup -o jsonpath
     done
     sleep 5
   done
-  # The blobcache may only be wiped once no nydusd holds it open: systemd
-  # alone can fail to kill a daemon behind a live FUSE mount (observed as
-  # "Failed to kill control group: Invalid argument"), and a surviving
-  # nydusd whose cache files vanished serves nothing but read errors
+
+  # Unpacked layers that outlive their image are removed outright, newest
+  # first since a layer cannot go while one built on it remains. Containerd
+  # would collect them eventually, but a pull that starts before it does
+  # finds them and skips the download
+  if [[ -n "${IMAGE_FACTS:-}" && -s "${IMAGE_FACTS}" ]]; then
+    chains="$(python3 -c 'import json,sys
+facts = json.load(open(sys.argv[1]))
+for image in facts.values():
+    for tag in image.values():
+        print(" ".join(reversed(tag["chain_ids"])))' "${IMAGE_FACTS}")"
+    nodeexec "${pod}" "
+      while read -r chain; do
+        for name in \${chain}; do
+          for snapshotter in overlayfs nydus; do
+            ctr -n k8s.io snapshots --snapshotter \${snapshotter} rm \${name} >/dev/null 2>&1 || true
+          done
+        done
+      done <<'CHAINS'
+${chains}
+CHAINS
+    " || true
+  fi
+
+  # Stop the nydus snapshotter and remove its cache before restarting
   nodeexec "${pod}" '
     systemctl stop nydus-snapshotter
     pkill -x nydusd 2>/dev/null || true
@@ -64,45 +104,28 @@ for pod in $(kubectl -n kube-system get pods -l app=nydus-node-setup -o jsonpath
     rm -rf /var/lib/containerd-nydus/cache/* 2>/dev/null || true
     systemctl start nydus-snapshotter
   ' || true
-  # The snapshotter needs a moment after the restart before it answers
-  # containerd again; a pod scheduled inside that window fails its sandbox
-  # creation and sits in kubelet backoff for half a minute, which would
-  # land squarely in the seed measurement
+  
   nodeexec "${pod}" '
     for _ in $(seq 1 90); do
       ctr -n k8s.io snapshots --snapshotter nydus ls >/dev/null 2>&1 && exit 0
       sleep 2
     done
-    echo "nydus-snapshotter still unresponsive after restart" >&2
+    echo "nydus-snapshotter not responding after restart" >&2
     exit 1
   '
 done
 
-# A repetition must not inherit pieces the previous one already pulled
-# through the p2p network: the Dragonfly clients keep their downloaded
-# pieces on emptyDir volumes, so recycling the pods drops the disk caches.
-# The scheduler deliberately stays up — its peer records die with the
-# peers' gRPC connections, while restarting it leaves a growing trail of
-# dead scheduler addresses in the manager database that every client then
-# health-checks for 3 s apiece until the kubelet probe kills it (observed
-# as a client crashloop after five resets). There is no seed peer to
-# recycle: the seed role is disabled because it cannot authenticate
-# back-to-source fetches against ACR. Safe at this point in the reset
-# because every nydusd is already unmounted and killed above
+# Restart dragonfly clients (also in-memory) to let them forget all downloaded chunks
 if [[ "${RESET_DRAGONFLY:-0}" == "1" ]]; then
-  echo "Recycling Dragonfly pods to drop the p2p disk caches"
   kubectl -n dragonfly-system rollout restart ds/dragonfly-client
   kubectl -n dragonfly-system rollout status ds/dragonfly-client --timeout=300s
 
-  # The recycle churns a hostNetwork pod on every node and the kubelets
-  # keep creating containers several seconds slower for a while afterwards,
-  # which would land squarely in the next seed measurement (observed as a
-  # uniform +6s on every pod, cold or warm). Gate on a canary pod starting
-  # at nominal speed on each node before handing the cluster back; busybox
-  # is already on the nodes as the Dragonfly init image, so the canary
-  # never touches a registry and never warms anything the benchmark reads
+  # Start and wait until a test pod starts under 4s on all nodes
+  # The idea is that node needs after dragonfly restart a bit to spin up new pods
+  # which will get faster after some time, which we wait here until they only take maximum 4s
   for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
-    canary="settle-canary-${node##*-}"
+    canary="settle-canary-${node##*-}" # name of this nodes test pod
+    
     for attempt in $(seq 1 10); do
       kubectl delete pod "${canary}" --ignore-not-found --timeout=60s >/dev/null 2>&1
       canary_start="$(date +%s.%N)"
@@ -110,24 +133,20 @@ if [[ "${RESET_DRAGONFLY:-0}" == "1" ]]; then
         --image-pull-policy=IfNotPresent --restart=Never \
         --overrides="{\"spec\":{\"nodeName\":\"${node}\"}}" \
         --command -- sleep 3600 >/dev/null
+        
       kubectl wait "pod/${canary}" --for=condition=Ready --timeout=120s >/dev/null
       canary_elapsed="$(awk -v a="$(date +%s.%N)" -v b="${canary_start}" 'BEGIN{printf "%.1f", a-b}')"
       kubectl delete pod "${canary}" --ignore-not-found --timeout=60s >/dev/null 2>&1
+      
       if awk -v e="${canary_elapsed}" 'BEGIN{exit !(e < 4)}'; then
-        echo "Pod creation on ${node} settled (canary ${canary_elapsed}s)"
+        echo "Pod creation on ${node} finished under 4s, done with this node..."
         break
       fi
-      echo "Pod creation on ${node} still slow after the recycle (canary ${canary_elapsed}s); waiting"
+      echo "Pod creation on ${node} still too slow after the restart (${canary_elapsed}s)..."
       sleep 20
     done
   done
 fi
 
-# The chunk-proxy deliberately keeps running through the reset: replacing
-# the DaemonSet leaves each node without a listener for half a minute, and
-# a daemon that mounts inside that window fails its first metadata fetch
-# and serves nothing but read errors for the rest of its life. Leftover
-# index entries for purged blobs are harmless because nothing asks for
-# them again, and the liveness probe replaces a genuinely wedged proxy
+# Check if the chunk proxy is still healthy
 kubectl -n kube-system rollout status ds/chunk-proxy --timeout=180s
-echo "Reset complete"

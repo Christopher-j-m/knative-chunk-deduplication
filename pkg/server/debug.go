@@ -8,26 +8,23 @@ import (
 	"nydus-cluster-cache/pkg/store"
 )
 
-// NewChunkListHandler serves the store's current contents as JSON.
-// It exists so a benchmark can capture exactly which chunks a cold start
-// brought into the cache; it is read-only and unpaginated, sized for corpus
-// images of a few thousand chunks rather than production catalogs.
+// Debug endpoint (only get/head /debug/chunks) that lists all chunks in our cache => sorted by hash so we dont need to hassle with random ordering
+// Also used for measuring which chunks are pulled into the cache during cold starts => sorting helps avoiding duplicate data on re-runs to be commited (no git diff in that case)
 func NewChunkListHandler(lister store.Lister) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.Error(w, "only GET is supported", http.StatusMethodNotAllowed)
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet && request.Method != http.MethodHead {
+			http.Error(writer, "only Get/Head is supported", http.StatusMethodNotAllowed)
 			return
 		}
 
 		listing := lister.Chunks()
 
-		// captures land in version control, so the order must not wobble
-		// between two runs that saw the same chunks
+		// Sort chunks lexicographic
 		sort.Slice(listing, func(i, j int) bool { return listing[i].Hash < listing[j].Hash })
 
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(listing); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		writer.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(writer).Encode(listing); err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
 		}
 	})
 }

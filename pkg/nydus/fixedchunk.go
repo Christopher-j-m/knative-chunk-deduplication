@@ -5,10 +5,9 @@ import (
 	"fmt"
 )
 
-// Splits a byte slice into fixed-size blocks and returns each as a ChunkInfo with its hash.
-// The last block may be smaller than chunkSize when the data length is not an exact multiple.
+// Split byte slice into fixed size chunks and return the fixed sized chunks
 func FixedChunk(data []byte, chunkSize int, imageName string) []ChunkInfo {
-	var chunks []ChunkInfo
+	var fixedSizedChunks []ChunkInfo
 
 	for offset := 0; offset < len(data); offset += chunkSize {
 		end := offset + chunkSize
@@ -19,13 +18,12 @@ func FixedChunk(data []byte, chunkSize int, imageName string) []ChunkInfo {
 		block := data[offset:end]
 		hash := sha256.Sum256(block)
 
-		chunks = append(chunks, ChunkInfo{
-			Hash:       fmt.Sprintf("sha256:%x", hash),
-			Size:       uint64(len(block)),
-			Image:      imageName,
-			ChunkIndex: offset / chunkSize,
+		fixedSizedChunks = append(fixedSizedChunks, ChunkInfo{
+			Hash:  fmt.Sprintf("sha256:%x", hash),
+			Size:  uint64(len(block)),
+			Image: imageName,
 		})
 	}
 
-	return chunks
+	return fixedSizedChunks
 }

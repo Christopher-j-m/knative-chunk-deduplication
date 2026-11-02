@@ -1,6 +1,4 @@
-# Configuration 1 workload: plain OCI image, served by containerd overlayfs.
-# Identical to workload-nydus.yaml except the image variant, so cold-start
-# timing is comparable across configurations.
+# Test image for oci
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:

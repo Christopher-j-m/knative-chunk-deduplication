@@ -6,92 +6,110 @@ import (
 	"sync"
 )
 
-// MemoryStore keeps chunk payloads in a map. Safe for concurrent readers and
-// writers via a single RWMutex; replace with sharded locks if profiling shows
-// contention on the chunk hash space.
+// The in-memory store for actually storing the chunks of the cluster cache
 type MemoryStore struct {
-	mu     sync.RWMutex
-	chunks map[string][]byte
-	bytes  uint64
+	mutex  sync.RWMutex      // Mutex to enable concurrent access to the store
+	chunks map[string][]byte // Map to store the image chunks => key is the hash of the chunk, value is the chunk itself
+	bytes  uint64            // Sum of the size of all chunks in the store
 }
 
-// NewMemoryStore creates an empty in-memory store. Callers can populate it via Put.
+// Create a new store
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{chunks: make(map[string][]byte)}
 }
 
-// Get returns a reader for the chunk identified by hash, or ErrNotFound.
-func (m *MemoryStore) Get(hash string) (io.ReadCloser, error) {
-	m.mu.RLock()
-	payload, ok := m.chunks[hash]
-	m.mu.RUnlock()
+// Returns a reader for the chunk of the specific hash or ErrNotFound if not found
+func (store *MemoryStore) Get(hash string) (io.ReadCloser, error) {
+
+	// RLock is a shared version of the mutex that allows multiple concurrent readers but only one writer
+	// (ofc the writer will block all readers until it is done <=> and readers will block the writer until they are done)
+	store.mutex.RLock()
+	payload, ok := store.chunks[hash]
+	store.mutex.RUnlock()
 
 	if !ok {
 		return nil, ErrNotFound
 	}
+
+	// Callers close the reader, but memory needs no cleanup => close does nothing
 	return io.NopCloser(bytes.NewReader(payload)), nil
 }
 
-// Put stores the bytes from payload under hash. Overwrites are allowed and
-// adjust the stored-bytes accounting accordingly.
-func (m *MemoryStore) Put(hash string, payload io.Reader) error {
-	buffer, err := io.ReadAll(payload)
+// Store a given chunk under the given hash
+// Since this is a put op, overwriting of the previous chunk may happen if the corresponding hash already exists
+func (store *MemoryStore) Put(hash string, payload io.Reader) error {
+
+	// Get the new chunk bytes
+	newChunkBytes, err := io.ReadAll(payload)
 	if err != nil {
 		return err
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Lock the store before we do any writing to the store
+	store.mutex.Lock()
 
-	if existing, ok := m.chunks[hash]; ok {
-		m.bytes -= uint64(len(existing))
+	// Unlock after fkt returns
+	defer store.mutex.Unlock()
+
+	// If we already have a chunk with the same hash
+	// => remove the byte size of the currently stored chunk from the total byte counter of the store
+	if existing, ok := store.chunks[hash]; ok {
+		store.bytes -= uint64(len(existing))
 	}
-	m.chunks[hash] = buffer
-	m.bytes += uint64(len(buffer))
+
+	// Store the new chunk at the given hash and add the new chunk size to the total byte counter of our store
+	store.chunks[hash] = newChunkBytes
+	store.bytes += uint64(len(newChunkBytes))
 	return nil
 }
 
-// Exists reports whether the chunk is currently stored, without reading bytes.
-func (m *MemoryStore) Exists(hash string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	_, ok := m.chunks[hash]
+// Returns true if the store already has a chunk with the specific hash, otherwise returns false
+func (store *MemoryStore) Exists(hash string) bool {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	_, ok := store.chunks[hash]
 	return ok
 }
 
-// Delete removes a chunk. Returns nil if the chunk did not exist.
-func (m *MemoryStore) Delete(hash string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing, ok := m.chunks[hash]; ok {
-		m.bytes -= uint64(len(existing))
-		delete(m.chunks, hash)
+// Deteles a chunk that is stored under the given hash, does nothing if such an entry doesnt exist yet
+func (store *MemoryStore) Delete(hash string) error {
+
+	// Same as in put, we need to lock the store before we do any writing/deleting
+	store.mutex.Lock()
+	defer store.mutex.Unlock() // Unlock afterwards...
+
+	// Delete the corresponding chunk if there is one under the given hash
+	if existing, ok := store.chunks[hash]; ok {
+		store.bytes -= uint64(len(existing))
+		delete(store.chunks, hash)
 	}
+
 	return nil
 }
 
-// StoredBytes reports the total number of payload bytes currently held.
-func (m *MemoryStore) StoredBytes() uint64 {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.bytes
+// Returns the total number of bytes of all chunks in the store combined
+func (store *MemoryStore) StoredBytes() uint64 {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	return store.bytes
 }
 
-// ChunkCount reports the number of distinct chunks currently held.
-func (m *MemoryStore) ChunkCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.chunks)
+// Returns the number of chunks in the store currently
+func (store *MemoryStore) ChunkCount() int {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	return len(store.chunks)
 }
 
-// Chunks returns one entry per stored chunk together with its payload size.
-func (m *MemoryStore) Chunks() []ChunkInfo {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+// Returns a list of all chunks in the store, including their hash and size in bytes
+func (store *MemoryStore) Chunks() []ChunkInfo {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
 
-	listing := make([]ChunkInfo, 0, len(m.chunks))
-	for hash, payload := range m.chunks {
+	listing := make([]ChunkInfo, 0, len(store.chunks))
+	for hash, payload := range store.chunks {
 		listing = append(listing, ChunkInfo{Hash: hash, Bytes: uint64(len(payload))})
 	}
+
 	return listing
 }

@@ -1,0 +1,11 @@
+config,image,rep,ready_seconds,received_bytes,cache_misses,cache_hits,failed_chunk_fetches,failure_reasons,failed_range_requests_logged
+2,fn-pytorch-cpu,1,37.625,302819823,0,0,365,connection refused=365,19
+2,fn-pytorch-cpu,2,66.212,309037696,0,0,390,connection refused=390,15
+2,fn-pytorch-cpu,3,68.929,323042103,0,0,902,connection refused=902,31
+2,fn-pytorch-cpu,4,41.406,301949618,0,0,442,connection refused=442,13
+2,fn-pytorch-cpu,5,61.941,325170286,0,0,1561,connection refused=1561,40
+4,fn-pytorch-cpu,1,70.147,316652769,4553,1229,303,connection refused=303,23
+4,fn-pytorch-cpu,2,67.071,313879925,4558,1107,306,connection refused=306,26
+4,fn-pytorch-cpu,3,67.184,317435663,4643,1208,392,connection refused=392,27
+4,fn-pytorch-cpu,4,43.927,304893636,4561,1118,337,connection refused=337,18
+4,fn-pytorch-cpu,5,41.181,313283485,4593,1793,366,connection refused=366,27

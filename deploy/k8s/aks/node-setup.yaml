@@ -1,6 +1,4 @@
-# Converges every AKS node (init container) and stays resident as the
-# host-exec vehicle (main container) for config switching, reset, and
-# benchmarks. hostPID + privileged: nsenter into the host is the whole point.
+# Install nydus on every cluster node
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

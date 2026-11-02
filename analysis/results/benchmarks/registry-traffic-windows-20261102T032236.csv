@@ -1,0 +1,3 @@
+config,nodes,image,rtt_ms,rate,reset_end,seed_end,scaleout_end
+2s,3,fn-python-hello,80,600mbit,2026-11-02T03:24:07Z,2026-11-02T03:24:21Z,2026-11-02T03:24:29Z
+2s,3,fn-pytorch-cpu,80,600mbit,2026-11-02T03:25:09Z,2026-11-02T03:25:29Z,2026-11-02T03:25:51Z

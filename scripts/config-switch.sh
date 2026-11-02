@@ -1,49 +1,41 @@
 #!/usr/bin/env bash
+# Change the configuration of the local test cluster
+# 1  = oci images without nydus or cluster cache
+# 2  = nydus without cluster cache, every read still goes through the chunk proxy
+# 2s = stock nydus without cluster cache, nydusd reads the registry itself and no proxy is involved
+# 3  = stock nydus reading through Dragonfly's peer-to-peer clients, no proxy or cache involved
+# 4  = nydus with cluster cache
 set -euo pipefail
 
-# Selects benchmark configuration 1, 2, or 4 by moving three knobs:
-#   1. the cluster-wide containerd snapshotter: config 1 keeps the overlayfs
-#      default, configs 2 and 4 switch the global default to nydus through a
-#      containerd drop-in, because image pulls always use the global
-#      snapshotter and never a per-runtime one
-#   2. the workload image (plain OCI for config 1, uncompressed Nydus for 2/4)
-#   3. the chunk-proxy cache toggle (--cache-enabled, config 2 vs 4)
-# Configuration 3 (Dragonfly) is deferred and exits non-zero.
-#
-# Changing the global snapshotter needs a containerd restart, so every switch
-# cycles the nodes (agents first, server last, so the API server goes down
-# last) and then restarts the host-process snapshotter, which does not survive
-# a node restart because the k3d nodes have no service manager.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG="${1:?usage: config-switch.sh <1|2|4>}"
+CONFIG="${1:?usage: config-switch.sh <1|2|2s|3|4>}"
 
+# Get all cluster nodes
 mapfile -t ALL_NODES < <("${REPO_ROOT}/scripts/cluster-nodes.sh")
 if [[ "${#ALL_NODES[@]}" -eq 0 ]]; then
-  echo "no cluster nodes found; is the k3d cluster running?" >&2
+  echo "no cluster nodes found" >&2
   exit 1
 fi
 SERVER="${ALL_NODES[0]}"
 AGENTS=("${ALL_NODES[@]:1}")
 DROPIN=/var/lib/rancher/k3s/agent/etc/containerd/config.toml.d/nydus-global.toml
 
+# copy the nydus config file to every node => this causes containerd to use nydus for all images instead
 place_global_dropin() {
   for node in "${AGENTS[@]}" "${SERVER}"; do
-    # a genuinely cold node has never had anything dropped into
-    # config.toml.d, so the directory does not exist yet and docker cp
-    # refuses to create a missing parent
     docker exec "${node}" mkdir -p "$(dirname "${DROPIN}")"
     docker cp "${REPO_ROOT}/deploy/local/snapshotter/nydus-global.toml" "${node}:${DROPIN}"
   done
 }
 
+# removes the nydus config file from every node again, so that containerd doesnt use nydus anymore
 remove_global_dropin() {
   for node in "${AGENTS[@]}" "${SERVER}"; do
     docker exec "${node}" rm -f "${DROPIN}"
   done
 }
 
-# Restarts every node so k3s re-renders the containerd config with or without
-# the drop-in, then waits for the API server and the nodes to come back
+# Restart every cluster node so the new containerd config file (e.g. with nydus settings) is read
 cycle_nodes() {
   for node in "${AGENTS[@]}" "${SERVER}"; do
     docker restart "${node}"
@@ -55,18 +47,14 @@ cycle_nodes() {
   kubectl wait --for=condition=Ready nodes --all --timeout=300s
 }
 
+# Enable the cluster cache route by rewriting the second input param
 set_cache_enabled() {
-  # Patches the chunk-proxy container (index 0), --cache-enabled arg (index 1)
   kubectl -n kube-system patch ds/chunk-proxy --type=json -p \
     "[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/args/1\",\"value\":\"--cache-enabled=$1\"}]"
   kubectl -n kube-system rollout status ds/chunk-proxy --timeout=300s
 }
 
-# Replaces the workload service outright so no revision from the previous
-# configuration lingers in the traffic split. The node cycle restarts the
-# Knative webhook too, and ksvc writes fail until it serves again — its
-# Deployment status is stale right after the cycle, so retry the writes
-# instead of trusting a condition wait
+# delete the python-hello test service and deploy it again via workfload file (either oci or nydus)
 apply_workload() {
   for _ in $(seq 1 30); do
     if kubectl delete ksvc fn-python-hello --ignore-not-found --timeout=120s \
@@ -75,41 +63,99 @@ apply_workload() {
     fi
     sleep 5
   done
-  echo "apply_workload: Knative webhook never became reachable" >&2
+  echo "error in apply_workload while removing the python test service" >&2
   return 1
 }
 
+# Copy nydusd onto every node with the given storage backend. Every nydus config
+# installs explicitly, otherwise switching back from 2s would keep the stock backend
+install_backend() {
+  BACKEND="$1" "${REPO_ROOT}/scripts/node-snapshotter.sh" install
+}
+
+# Fail the switch when a node does not carry the backend the config asked for.
+# Stock nydusd and Dragonfly share the registry type and differ only in the
+# mirror, so the mirror count is part of what is checked
+assert_backend() {
+  local expected="$1" expected_mirrors="${2:-0}"
+  local node actual
+  for node in "${AGENTS[@]}" "${SERVER}"; do
+    actual="$(docker exec "${node}" cat /etc/nydus/nydusd-config.json \
+      | python3 -c 'import json,sys; backend = json.load(sys.stdin)["device"]["backend"]; print(backend["type"], len(backend.get("config", {}).get("mirrors", [])))')"
+    if [[ "${actual}" != "${expected} ${expected_mirrors}" ]]; then
+      echo "${node}: nydusd backend is ${actual}, expected ${expected} with ${expected_mirrors} mirrors" >&2
+      exit 1
+    fi
+  done
+  echo "nydusd backend on every node: ${expected} with ${expected_mirrors} mirrors"
+}
+
+# Dragonfly only runs under configuration 3, so its clients cannot take
+# processor time from the other configurations' cells
+remove_dragonfly() {
+  "${REPO_ROOT}/scripts/dragonfly-rig.sh" uninstall
+}
+
+# Handle the different input params based on which config we want to setup
 case "${CONFIG}" in
   1)
-    echo "Config 1 - containerd baseline (overlayfs, OCI image)"
+    echo "Config 1: plain containerd with oci images"
+    remove_dragonfly
     remove_global_dropin
     cycle_nodes
     "${REPO_ROOT}/scripts/node-snapshotter.sh" stop
     apply_workload "${REPO_ROOT}/deploy/k8s/knative/workload-oci.yaml"
     ;;
   2)
-    echo "Config 2 - Nydus local-only (cache bypassed)"
+    echo "Config 2: nydus without cluster cache"
+    remove_dragonfly
     place_global_dropin
     cycle_nodes
+    install_backend http-proxy
     "${REPO_ROOT}/scripts/node-snapshotter.sh" start
+    assert_backend http-proxy
     set_cache_enabled "false"
     apply_workload "${REPO_ROOT}/deploy/k8s/knative/workload-nydus.yaml"
     ;;
-  4)
-    echo "Config 4 - Nydus + cluster cache"
+  2s)
+    echo "Config 2s: stock nydusd, registry backend, no proxy"
+    remove_dragonfly
     place_global_dropin
     cycle_nodes
+    install_backend registry
     "${REPO_ROOT}/scripts/node-snapshotter.sh" start
+    assert_backend registry 0
+    apply_workload "${REPO_ROOT}/deploy/k8s/knative/workload-nydus.yaml"
+    ;;
+  4)
+    echo "Config 4: nydus + cluster cache"
+    remove_dragonfly
+    place_global_dropin
+    cycle_nodes
+    install_backend http-proxy
+    "${REPO_ROOT}/scripts/node-snapshotter.sh" start
+    assert_backend http-proxy
     set_cache_enabled "true"
     apply_workload "${REPO_ROOT}/deploy/k8s/knative/workload-nydus.yaml"
     ;;
   3)
-    echo "Config 3 (Nydus + Dragonfly) is deferred and not wired" >&2
-    exit 1
+    echo "Config 3: stock nydusd reading through Dragonfly"
+    place_global_dropin
+    cycle_nodes
+    # The snapshotter must run before anything else starts, because with the
+    # global drop-in every pod, Dragonfly's own included, mounts through it.
+    # Dragonfly follows the node restart, so its clients start on the final
+    # containers, and it is up before the first function image is mounted
+    install_backend dragonfly
+    "${REPO_ROOT}/scripts/node-snapshotter.sh" start
+    assert_backend registry 1
+    "${REPO_ROOT}/scripts/dragonfly-rig.sh" install
+    set_cache_enabled "false"
+    apply_workload "${REPO_ROOT}/deploy/k8s/knative/workload-nydus.yaml"
     ;;
   *)
-    echo "Unknown config ${CONFIG}; choose 1, 2, or 4" >&2
+    echo "Only config 1, 2, 2s, 3, 4 are implemented" >&2
     exit 1
     ;;
 esac
-echo "Switched to config ${CONFIG}. Run scripts/cluster-reset.sh before measuring."
+echo "Switched to config ${CONFIG}"

@@ -6,100 +6,111 @@ import (
 	"time"
 )
 
-// breaker trips open after a number of consecutive cache failures and stays open
-// for a cooldown, after which it half-opens to let traffic probe the cache again.
+// Controls at how many consecutive cache failures (threshold) - NOT MISSES - the proxy requests the remote registry directly
+// and after what duration (cooldown & concrete deadline in openUntil) the proxy can try to send requests to the cluster cache again
 type breaker struct {
-	threshold int
-	cooldown  time.Duration
-
-	mu        sync.Mutex
-	failures  int
-	openUntil time.Time
+	mutex     sync.Mutex
+	threshold int           // Amount of subsequent cache failures before re-routing to registry
+	cooldown  time.Duration // Duration (s) for the re-routing to registry
+	openUntil time.Time     // Duration of re-routing set as timestamp
+	failures  int           // Subsequent cache failures
 }
 
 func newBreaker(threshold int, cooldown time.Duration) *breaker {
 	return &breaker{threshold: threshold, cooldown: cooldown}
 }
 
-func (b *breaker) open() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return time.Now().Before(b.openUntil)
+// Returns if the re-routing to the registry is active currently (due to cache failures)
+func (failureBreaker *breaker) open() bool {
+	failureBreaker.mutex.Lock()
+	defer failureBreaker.mutex.Unlock()
+	return time.Now().Before(failureBreaker.openUntil)
 }
 
-func (b *breaker) recordFailure() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.failures++
-	if b.failures >= b.threshold {
-		b.openUntil = time.Now().Add(b.cooldown)
+// Record a recently occured cache failure
+// Blocks the cache if this new failure matches the allowed threshold
+func (failureBreaker *breaker) recordFailure() {
+	failureBreaker.mutex.Lock()
+	defer failureBreaker.mutex.Unlock()
+	failureBreaker.failures++
+	if failureBreaker.failures >= failureBreaker.threshold {
+		failureBreaker.openUntil = time.Now().Add(failureBreaker.cooldown)
 	}
 }
 
-func (b *breaker) recordSuccess() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.failures = 0
-	b.openUntil = time.Time{}
+// Record a recently successful cache request
+// This resets the failure counter for the threshold and any active cache blocking/re-routing
+func (failureBreaker *breaker) recordSuccess() {
+	failureBreaker.mutex.Lock()
+	defer failureBreaker.mutex.Unlock()
+	failureBreaker.failures = 0
+	failureBreaker.openUntil = time.Time{}
 }
 
+// An item of a chunk that needs to be uploaded to the cluster cache
 type populateJob struct {
 	digest string
 	data   []byte
 }
 
-// populatePool runs cache writes on a fixed set of workers behind a bounded
-// queue. When the queue is full a submission is dropped, so populating the cache
-// never blocks the serving path.
+// Cache writes with a worker pool and a queue with capacity
+// If the queue capacity is reached, any new jobs are dropped
+// => Since the proxy works in-memory, we dont want to slow down
+// the fetch-requests by growing the queue until the proxy runs out of memory
 type populatePool struct {
-	jobs   chan populateJob
-	work   func(digest string, data []byte)
-	wg     sync.WaitGroup
-	active atomic.Int64
+	jobs      chan populateJob                 // queue
+	work      func(digest string, data []byte) // worker func to upload chunks to cache
+	waitGroup sync.WaitGroup                   // Wait group that is used to wait for all workers to finish during proxy shutdown
+	active    atomic.Int64                     // amount of currently running uploads => used for drain
 
-	mu      sync.Mutex
-	stopped bool
+	mutex   sync.Mutex
+	stopped bool // Running state => true means further submit calls are ignored, since we dont want to panic if the jobs chan is closed
 }
 
 func newPopulatePool(workers, queue int, work func(digest string, data []byte)) *populatePool {
-	p := &populatePool{jobs: make(chan populateJob, queue), work: work}
+	pool := &populatePool{jobs: make(chan populateJob, queue), work: work}
 	for i := 0; i < workers; i++ {
-		p.wg.Add(1)
+		pool.waitGroup.Add(1)
 		go func() {
-			defer p.wg.Done()
-			for job := range p.jobs {
-				p.active.Add(1)
-				p.work(job.digest, job.data)
-				p.active.Add(-1)
+			defer pool.waitGroup.Done()
+			for job := range pool.jobs {
+				pool.active.Add(1)
+				pool.work(job.digest, job.data)
+				pool.active.Add(-1)
 			}
 		}()
 	}
-	return p
+	return pool
 }
 
-func (p *populatePool) submit(digest string, data []byte) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.stopped {
+// Add a new upload job to the queue
+func (pool *populatePool) submit(digest string, data []byte) {
+	pool.mutex.Lock()
+	defer pool.mutex.Unlock()
+
+	if pool.stopped {
 		return
 	}
+
 	select {
-	case p.jobs <- populateJob{digest: digest, data: data}:
+	case pool.jobs <- populateJob{digest: digest, data: data}:
 	default:
 	}
 }
 
-// drain blocks until the queue is empty and all running jobs have returned.
-func (p *populatePool) drain() {
-	for len(p.jobs) > 0 || p.active.Load() > 0 {
+// Blocks until the queue is empty, meaning all jobs have returned
+func (pool *populatePool) drain() {
+	for len(pool.jobs) > 0 || pool.active.Load() > 0 {
 		time.Sleep(time.Millisecond)
 	}
 }
 
-func (p *populatePool) stop() {
-	p.mu.Lock()
-	p.stopped = true
-	close(p.jobs)
-	p.mu.Unlock()
-	p.wg.Wait()
+// Sets the state to stopped, meaning no new jobs are accepted
+// Also we wait for all running workers to finish their running and queued jobs
+func (pool *populatePool) stop() {
+	pool.mutex.Lock()
+	pool.stopped = true
+	close(pool.jobs)
+	pool.mutex.Unlock()
+	pool.waitGroup.Wait()
 }

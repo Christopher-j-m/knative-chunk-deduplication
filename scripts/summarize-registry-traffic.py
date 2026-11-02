@@ -98,7 +98,7 @@ def main():
                 "total_bytes": seed_bytes + scale_bytes,
             })
 
-    rows.sort(key=lambda row: (row["image"], int(row["config"]), row["nodes"]))
+    rows.sort(key=lambda row: (row["image"], row["config"], row["nodes"]))
 
     # the saving is only meaningful where both configurations ran the same size
     baseline = {

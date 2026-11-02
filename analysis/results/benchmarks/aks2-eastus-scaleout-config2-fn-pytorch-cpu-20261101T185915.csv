@@ -1,0 +1,13 @@
+config,rep,phase,node,warm,ready_seconds,pull_seconds,cache_hits_delta,cache_misses_delta,node_rx_bytes
+2,1,seed,aks-node-00000d,no,154.485,2.478,0,0,279906867
+2,1,scaleout,aks-node-00000d,yes,11.898,0,0,0,7833028
+2,1,scaleout,aks-node-00000c,no,160.272,2.467,0,0,301044926
+2,1,scaleout,aks-node-00000e,no,162.888,2.719,0,0,288319776
+2,2,seed,aks-node-00000d,no,154.624,2.544,0,0,278694847
+2,2,scaleout,aks-node-00000d,yes,7.687,0,0,0,7117676
+2,2,scaleout,aks-node-00000c,no,154.001,2.827,0,0,294451728
+2,2,scaleout,aks-node-00000e,no,161.492,4.916,0,0,275263292
+2,3,seed,aks-node-00000d,no,150.239,2.693,0,0,279152345
+2,3,scaleout,aks-node-00000d,yes,15.225,0,0,0,8532259
+2,3,scaleout,aks-node-00000c,no,165.197,2.739,0,0,288486496
+2,3,scaleout,aks-node-00000e,no,167.411,2.652,0,0,273968372

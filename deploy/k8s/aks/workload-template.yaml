@@ -1,9 +1,4 @@
-# Knative workload for one corpus function on AKS. Rendered by
-# scripts/render-workload.sh: the registry, function name, image variant
-# tag, and listen port are substituted per benchmark cell, so one template
-# serves every configuration and every corpus image. The image runs its
-# own entrypoint; the cache vs no-cache difference is the chunk-proxy
-# --cache-enabled toggle, not this manifest
+# Template for every image that we use during the runs 
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -20,6 +15,7 @@ spec:
         - image: __ACR__/__SERVICE__:__TAG__
           ports:
             - containerPort: __PORT__
+          # Check every seconds if the node can accept new connections so the measurements are correct
           readinessProbe:
             tcpSocket:
               port: __PORT__

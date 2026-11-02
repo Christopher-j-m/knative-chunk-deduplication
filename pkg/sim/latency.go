@@ -1,129 +1,134 @@
 package sim
 
-// FetchCounts records where one cold start's chunks came from. The simulator
-// already decides this per chunk; keeping the counts lets a cost model charge
-// each class at its own rate.
+// Approximate the cold start latency (container starts on a node that hasnt seen the image yet) by adding up the apps startup time
+// via ibm trace data + cost for missing image data (based on where they come from, e.g. cache, remote registry, the node itself) or
+// the total cost for downloading the whole image
+
+// Recording where the chunks during a cold start came from
 type FetchCounts struct {
-	LocalChunks    int
-	CacheChunks    int
-	RegistryChunks int
-	RegistryBytes  uint64
+	LocalChunks    int    // data that was already in the local node cache (cheapest)
+	CacheChunks    int    // ... from the cluster cache
+	RegistryChunks int    // ... from the remote registry (most expensive)
+	RegistryBytes  uint64 // how many bytes we needed to fetch from registry
 }
 
-// CostModel turns a cold start's chunk accounting into the delay before the
-// pod can serve. Every coefficient is meant to be read off measured cells
-// rather than chosen, so the model carries no constant that the evaluation
-// has not already reported.
+// Contains the estimated cost/latencies in ms based on where the image data was fetched from
 type CostModel struct {
-	// application startup, which no distribution strategy can remove,
-	// indexed by image
-	WarmFloorMs        []int64
-	DefaultWarmFloorMs int64
+	WarmFloorMs        []int64 // Image startup time
+	DefaultWarmFloorMs int64   // Baseline startup time if we dont know the image startup time
 
-	// what one chunk costs when it comes from the registry, and when it comes
-	// from the cluster cache, at the round trip the coefficients were fitted at
-	RegistryChunkMs float64
-	CacheChunkMs    float64
+	RegistryChunkMs float64 // cost (rtt, unpacking, ...) for a chunk fetched from the remote registry
+	CacheChunkMs    float64 // ... from the cluster cache
 
-	// eager pulling ignores the startup working set and moves the whole
-	// compressed image instead, so it is charged in bytes over a rate
-	Eager           bool
-	ConnectMs       int64
-	EagerBytesPerMs float64
-	EagerImageBytes []uint64
+	Eager           bool     // if true, we calculate as if we fetch the whole image first before starting (instead of fetching ondemand)
+	ConnectMs       int64    // a delay per eager download before data actually start transmitting (e.g. tcp handshake)
+	EagerBytesPerMs float64  // download speed in eager mode
+	EagerImageBytes []uint64 // compressed image size that gets downloaded in eager mode
 }
 
-// warmFloor is the image's own startup floor, falling back to the default
-// for an image the measurements never covered
-func (m CostModel) warmFloor(image int32) int64 {
-	if image < 0 || int(image) >= len(m.WarmFloorMs) || m.WarmFloorMs[image] == 0 {
-		return m.DefaultWarmFloorMs
+// Estimated time for a specific image to start when all its data is already on the node
+func (cost CostModel) warmFloor(image int32) int64 {
+
+	// Check if the image number is even within our list or its value is zero (== not measured yet)
+	// In that case return the fallback default value
+	if image < 0 || int(image) >= len(cost.WarmFloorMs) || cost.WarmFloorMs[image] == 0 {
+		return cost.DefaultWarmFloorMs
 	}
-	return m.WarmFloorMs[image]
+
+	return cost.WarmFloorMs[image]
 }
 
-// eagerBytes is the compressed size an eager pull has to move, or zero for
-// an image the measurements never covered
-func (m CostModel) eagerBytes(image int32) uint64 {
-	if image < 0 || int(image) >= len(m.EagerImageBytes) {
+// look up the compressed size of an image, which has to be downloaded in case of eager mode
+func (cost CostModel) eagerBytes(image int32) uint64 {
+
+	// Return 0 if not measured yet
+	if image < 0 || int(image) >= len(cost.EagerImageBytes) {
 		return 0
 	}
-	return m.EagerImageBytes[image]
+
+	return cost.EagerImageBytes[image]
 }
 
-// StartupMs is how long the pod takes before it can answer a request.
-func (m CostModel) StartupMs(image int32, counts FetchCounts) int64 {
-	total := m.warmFloor(image)
+// estimate how long the pod takes before it can answer a request
+// Beispiel: 500ms base, 10 cache chunks ~2ms, 5 registry chunks ~20 ms = 620 ms coldstart latency
+func (cost CostModel) StartupMs(image int32, counts FetchCounts) int64 {
+	total := cost.warmFloor(image)
 
-	if m.Eager {
-		total += m.ConnectMs
-		if m.EagerBytesPerMs > 0 {
-			total += int64(float64(m.eagerBytes(image)) / m.EagerBytesPerMs)
+	// need to download whole image upfront, so we dont need to calculate by missing chunk
+	if cost.Eager {
+		total += cost.ConnectMs
+
+		// prevent division by zero, in that case only setup delay costs
+		if cost.EagerBytesPerMs > 0 {
+			total += int64(float64(cost.eagerBytes(image)) / cost.EagerBytesPerMs)
 		}
+
 		return total
 	}
 
-	total += int64(float64(counts.CacheChunks) * m.CacheChunkMs)
-	total += int64(float64(counts.RegistryChunks) * m.RegistryChunkMs)
+	total += int64(float64(counts.CacheChunks) * cost.CacheChunkMs)
+	total += int64(float64(counts.RegistryChunks) * cost.RegistryChunkMs)
 	return total
 }
 
-// Latency accumulates every invocation's response time in one-millisecond
-// buckets, which holds a week of traffic in about a megabyte instead of the
-// gigabytes a full sample would need. Observations past the ceiling fall into
-// an overflow bucket and report at the ceiling, so a long tail reads as slow
-// rather than disappearing.
+// custom format for the response time data of the ibm traces (which would take too much mem)
 type Latency struct {
-	buckets  []uint64
-	overflow uint64
-	count    uint64
-	maxMs    int64
+	buckets  []uint64 // slots for response times (0,1,2,...) and the count indicating how often e.g. 1ms response times occured (1ms = slot 1)
+	overflow uint64   // amount of requests that took longer than the largest slot in the buckets (in our case > 2 mins)
+	count    uint64   // amount of requests recorded
+	maxMs    int64    // largest response time measured in overflow, rest just increments overflow
 }
 
-// NewLatency creates a histogram covering zero to maxMs inclusive.
+// histogram with one bucket for every ms from 0 to 2 mins (in ms)
 func NewLatency(maxMs int64) *Latency {
 	if maxMs < 1 {
 		maxMs = 1
 	}
+
 	return &Latency{buckets: make([]uint64, maxMs+1), maxMs: maxMs}
 }
 
-// Observe records one response time in milliseconds.
-func (l *Latency) Observe(ms int64) {
-	l.count++
+// records one response time in milliseconds
+func (latency *Latency) Observe(ms int64) {
+	latency.count++
 	if ms < 0 {
 		ms = 0
 	}
-	if ms > l.maxMs {
-		l.overflow++
+
+	if ms > latency.maxMs {
+		latency.overflow++
 		return
 	}
-	l.buckets[ms]++
+
+	latency.buckets[ms]++
 }
 
-// Count is how many observations the histogram holds.
-func (l *Latency) Count() uint64 { return l.count }
+func (latency *Latency) Count() uint64 { return latency.count }
 
-// Quantile returns the response time at the given quantile, by nearest rank.
-func (l *Latency) Quantile(q float64) int64 {
-	if l.count == 0 {
+// returns the response time at the given quantile
+func (latency *Latency) Quantile(quantile float64) int64 {
+	if latency.count == 0 {
 		return 0
 	}
 
-	target := uint64(q * float64(l.count))
+	// get target position of the quantil position
+	target := uint64(quantile * float64(latency.count))
 	if target < 1 {
 		target = 1
 	}
-	if target > l.count {
-		target = l.count
+
+	if target > latency.count {
+		target = latency.count
 	}
 
+	// go over each bucket and add up their count until we reach the target position
 	var seen uint64
-	for ms, n := range l.buckets {
+	for ms, n := range latency.buckets {
 		seen += n
 		if seen >= target {
 			return int64(ms)
 		}
 	}
-	return l.maxMs
+
+	return latency.maxMs
 }

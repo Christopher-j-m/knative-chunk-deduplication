@@ -1,4 +1,3 @@
-// cmd/overlap-analyzer/main.go
 package main
 
 import (
@@ -16,9 +15,8 @@ import (
 	"nydus-cluster-cache/pkg/nydus"
 )
 
-// CorpusConfig holds the image registry and coverage scenario definitions from the corpus JSON file.
-// Each image has a role label used for filtering, and scenarios describe the order in which
-// images are "seen" to simulate different cache warm-up strategies.
+// Contains the list of image with their respective roles (overlap analysis only or knative-workload for later experiments)
+// and coverage scenarios (same runtime burst, cold cluster, workload-burst, and more)
 type CorpusConfig struct {
 	Images []struct {
 		ID   string `json:"id"`
@@ -31,18 +29,16 @@ type CorpusConfig struct {
 	} `json:"coverage_scenarios"`
 }
 
-// BlobOverlapOutput captures the side-by-side deduplication results for OCI layers and Nydus blobs.
-// ChunkMinusBlobMB shows how much additional space Nydus content-defined chunking saves
-// compared to the OCI blob granularity.
+// Used for comparing deduplication for OCI layers and nydus blobs
 type BlobOverlapOutput struct {
 	OCIMetrics       analysis.LayerOverlapMetrics    `json:"oci_metrics"`
 	NydusMetrics     analysis.LayerOverlapMetrics    `json:"nydus_metrics"`
 	OCIPairwise      []analysis.PairwiseLayerOverlap `json:"oci_pairwise,omitempty"`
 	NydusPairwise    []analysis.PairwiseLayerOverlap `json:"nydus_pairwise,omitempty"`
-	ChunkMinusBlobMB int64                           `json:"chunk_minus_blob_mb"`
+	ChunkMinusBlobMB int64                           `json:"chunk_minus_blob_mb"` // How much add. space nydus content-defined chunking can save
 }
 
-// Top-level JSON written to file with corpus-wide metrics, per-image-pair sharing, coverage curves, and chunk frequency data.
+// Metrics across all the images, such as per image-pair overlap, chunk frequencies,...
 type AnalysisOutput struct {
 	Corpus      analysis.CorpusMetrics      `json:"corpus_metrics"`
 	Pairwise    []analysis.PairwiseOverlap  `json:"pairwise_overlap"`
@@ -52,17 +48,18 @@ type AnalysisOutput struct {
 }
 
 func main() {
+	// Set the default input params
 	input := flag.String("input", "analysis/results/chunks.json", "Input chunks JSON")
 	corpusFile := flag.String("corpus", "analysis/corpus.json", "Corpus config with scenarios")
 	output := flag.String("output", "analysis/results/overlap.json", "Output analysis JSON")
 	filterRole := flag.String("filter-role", "", "Filter to images with this role (e.g. knative-workload)")
-	useAccessed := flag.Bool("accessed-only", false, "Use accessed chunks only (startup working set)")
-	blobOverlap := flag.Bool("blob-overlap", false, "Compute OCI layer and Nydus blob overlap baseline")
-	compareFixed := flag.Bool("compare-fixed", false, "Run lambda-style 512 KiB chunking comparison")
+	useAccessed := flag.Bool("accessed-only", false, "Use accessed chunks only (during startup)")
+	blobOverlap := flag.Bool("blob-overlap", false, "Compute OCI layer and Nydus blob overlap")
+	compareFixed := flag.Bool("compare-fixed", false, "Run 512 KiB fixed chunking comparison")
 	exportDir := flag.String("export-dir", "", "Directory with exported filesystems (required with --compare-fixed)")
 	fixedOutput := flag.String("fixed-output", "", "Output JSON for fixed-chunk analysis (required with --compare-fixed)")
 	comparisonOutput := flag.String("comparison-output", "", "Output JSON for Nydus vs fixed summary (required with --compare-fixed)")
-	flag.Parse()
+	flag.Parse() // Parse user input params
 
 	if *compareFixed && *useAccessed {
 		log.Fatal("--compare-fixed and --accessed-only are incompatible, since fixed corpus have no startup access traces")
@@ -84,7 +81,7 @@ func main() {
 		log.Fatalf("error parsing input: %v", err)
 	}
 
-	// Filter the corpus to images matching the requested role so role-specific analysis stays isolated
+	// Filter image list to ones matching the specified role
 	if *filterRole != "" {
 		corpusData, err := os.ReadFile(*corpusFile)
 		if err != nil {
@@ -96,35 +93,37 @@ func main() {
 			log.Fatalf("error parsing corpus config: %v", err)
 		}
 
-		allowedNames := make(map[string]struct{})
-		for _, img := range config.Images {
-			if img.Role == *filterRole {
-				allowedNames[img.ID] = struct{}{}
+		// Get the images whose role is the one we're filtering for
+		imageNamesWithRole := make(map[string]struct{})
+		for _, currImage := range config.Images {
+			if currImage.Role == *filterRole {
+				imageNamesWithRole[currImage.ID] = struct{}{}
 			}
 		}
 
+		// Get the chunks of the images that we previously filtered by a specific role
 		var filtered []nydus.ImageChunks
-		for _, ic := range corpus {
-			if _, ok := allowedNames[ic.Image]; ok {
-				filtered = append(filtered, ic)
+		for _, currImageChunks := range corpus {
+			if _, ok := imageNamesWithRole[currImageChunks.Image]; ok {
+				filtered = append(filtered, currImageChunks)
 			}
 		}
-		fmt.Printf("Filtered to %d images with role=%s\n", len(filtered), *filterRole)
+		fmt.Printf("Filtered to %d images with the specific role %s\n", len(filtered), *filterRole)
 		corpus = filtered
 	}
 
-	// Choose between all chunks or only those touched during startup, depending on what we're measuring
-	sel := analysis.AllChunks
+	// Choose between all chunks or only those accessed during startup, depending on the input param
+	chunkSelector := analysis.AllChunks
 	if *useAccessed {
 		if err := analysis.ValidateAccessData(corpus); err != nil {
 			log.Fatalf("--accessed-only requires startup trace data: %v", err)
 		}
-		sel = analysis.AccessedOnly
+		chunkSelector = analysis.AccessedOnly
 	}
 
 	fmt.Printf("Analyzing %d images...\n", len(corpus))
 
-	metrics := analysis.ComputeCorpusMetrics(corpus, sel)
+	metrics := analysis.ComputeCorpusMetrics(corpus, chunkSelector)
 	fmt.Printf("\nCorpus Metrics:\n")
 	fmt.Printf("Total chunks: %d\n", metrics.TotalChunks)
 	fmt.Printf("Unique chunks: %d\n", metrics.UniqueChunks)
@@ -134,8 +133,8 @@ func main() {
 	fmt.Printf("Unique bytes: %d MB\n", metrics.UniqueBytes/1024/1024)
 	fmt.Printf("Redundant: %d MB\n", metrics.RedundantBytes/1024/1024)
 
-	// Sort pairs by shared bytes descending so the pairs with the potentially most overlap appear first in the output
-	pairwise := analysis.ComputePairwiseOverlap(corpus, sel)
+	// Sort so that the pairs with the potentially most overlap appear at top of the list
+	pairwise := analysis.ComputePairwiseOverlap(corpus, chunkSelector)
 	sort.Slice(pairwise, func(i, j int) bool {
 		if pairwise[i].SharedBytes != pairwise[j].SharedBytes {
 			return pairwise[i].SharedBytes > pairwise[j].SharedBytes
@@ -151,86 +150,89 @@ func main() {
 		if i >= 5 {
 			break
 		}
-		fmt.Printf("  %s - %s: %d chunks, %d MB (%.0f%%/%.0f%% by bytes)\n",
-			p.ImageA, p.ImageB, p.SharedChunks, p.SharedBytes/1024/1024,
-			p.OverlapByBytesA*100, p.OverlapByBytesB*100)
+		fmt.Printf("%s - %s: %d chunks, %d MB (%.0f%%/%.0f%% by bytes)\n", p.ImageA, p.ImageB, p.SharedChunks, p.SharedBytes/1024/1024, p.OverlapByBytesA*100, p.OverlapByBytesB*100)
 	}
 
-	// Run each coverage scenario to see how quickly a cache fills up as images arrive in different orders
+	// Run the coverage scenarios
 	var scenarios []analysis.CoverageScenario
 	corpusData, err := os.ReadFile(*corpusFile)
 	if err == nil {
 		var config CorpusConfig
 
 		if err := json.Unmarshal(corpusData, &config); err == nil && len(config.CoverageScenarios) > 0 {
-			var inputs []analysis.CoverageScenarioInput
+			var inputs []analysis.CoverageOrder
 
-			for _, s := range config.CoverageScenarios {
+			for _, currScenario := range config.CoverageScenarios {
 
 				// Skip scenarios that don't match the active role filter, or skip scoped scenarios when no filter is set
 				if *filterRole != "" {
-					if s.Scope == nil || *s.Scope != *filterRole {
+					if currScenario.Scope == nil || *currScenario.Scope != *filterRole {
 						continue
 					}
 				} else {
-					if s.Scope != nil {
+					if currScenario.Scope != nil {
 						continue
 					}
 				}
 
-				order := s.Order
+				order := currScenario.Order
 				if order == nil {
 
-					// Use a seed so results are reproducible without storing the full order somewhere
+					// Use a seed for easier debugging...
 					seed := int64(0)
-					for _, c := range s.Name {
-						seed = seed*31 + int64(c)
+					for _, currScenarioName := range currScenario.Name {
+						seed = seed*31 + int64(currScenarioName)
 					}
 
 					rng := rand.New(rand.NewSource(seed))
 					order = make([]string, len(corpus))
-					for i, ic := range corpus {
-						order[i] = ic.Image
+					for i, imageChunks := range corpus {
+						order[i] = imageChunks.Image
 					}
 
 					rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
 				}
-				inputs = append(inputs, analysis.CoverageScenarioInput{Name: s.Name, Order: order})
-			}
-			var scenarioErr error
-			scenarios, scenarioErr = analysis.ComputeCoverageCurveMultiOrder(corpus, inputs, sel)
-			if scenarioErr != nil {
-				log.Fatalf("error occured : %v", scenarioErr)
+				inputs = append(inputs, analysis.CoverageOrder{Name: currScenario.Name, Order: order})
 			}
 
+			// Run the curr scenario by simulating the cluster cache filling up with the given workload order
+			var scenarioErr error
+			scenarios, scenarioErr = analysis.ComputeCoverageCurveMultiOrder(corpus, inputs, chunkSelector)
+			if scenarioErr != nil {
+				log.Fatalf("error occured while simulating the scenario: %v", scenarioErr)
+			}
+
+			// Only print how much could've been served by the cache instead of registry at the last line
+			// => last line = state after every image arrived
 			fmt.Printf("\nCoverage:\n")
-			for _, s := range scenarios {
-				if len(s.Curve) > 0 {
-					last := s.Curve[len(s.Curve)-1]
-					fmt.Printf("%-20s: %.1f%% (chunks), %.1f%% (bytes)\n",
-						s.Name, last.PotentialHitRateChunks*100, last.PotentialHitRateBytes*100)
+			for _, currScenario := range scenarios {
+				if len(currScenario.Curve) > 0 {
+					last := currScenario.Curve[len(currScenario.Curve)-1]
+					fmt.Printf("%-20s: %.1f%% (chunks), %.1f%% (bytes)\n", currScenario.Name, last.PotentialHitRateChunks*100, last.PotentialHitRateBytes*100)
 				}
 			}
 		}
 	}
 
-	// Count how many images reference each chunk to measuring sharing depth across the corpus
-	frequencies := analysis.ComputeChunkFrequencies(corpus, sel)
+	// Count how many images reference each chunk
+	frequencies := analysis.ComputeChunkFrequencies(corpus, chunkSelector)
 	fmt.Printf("\nChunk frequency distribution:\n")
 	refCounts := make(map[int]int)
-	for _, f := range frequencies {
-		refCounts[f.RefCount]++
+	for _, currFrequency := range frequencies {
+		refCounts[currFrequency.RefCount]++
 	}
-	for count := len(corpus); count >= 1; count-- {
-		if n, ok := refCounts[count]; ok {
-			fmt.Printf("Referenced by %d images: %d chunks\n", count, n)
+
+	for imageCount := len(corpus); imageCount >= 1; imageCount-- {
+		if chunkCount, ok := refCounts[imageCount]; ok {
+			fmt.Printf("Referenced by %d images: %d chunks\n", imageCount, chunkCount)
 		}
 	}
 
-	// Compare Nydus chunk-level deduplication against the coarser OCI layer and Nydus blob granularity
+	// Compare Nydus chunk-level deduplication against same layers
+	// => Layers need to be exact same to be considered duplicates, chunks are more granular
 	var blobOutput *BlobOverlapOutput
 	if *blobOverlap {
-		// Expect the layer file alongside the chunks file
+		// Load the layer list for each image from file (contains both nydus & oci format)
 		layerPath := strings.TrimSuffix(*input, ".json") + "-layers.json"
 		layerData, err := os.ReadFile(layerPath)
 		if err != nil {
@@ -241,6 +243,7 @@ func main() {
 			OCI   []analysis.ImageLayers `json:"oci_layers"`
 			Nydus []analysis.ImageLayers `json:"nydus_layers"`
 		}
+
 		if err := json.Unmarshal(layerData, &layers); err != nil {
 			log.Fatalf("error parsing layer data: %v", err)
 		}
@@ -277,7 +280,7 @@ func main() {
 		BlobOverlap: blobOutput,
 	}
 
-	// Skip writing the Nydus results when we're in comparison mode
+	// Skip writing the results when we're in comparison mode
 	if !*compareFixed {
 		out, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
@@ -288,35 +291,41 @@ func main() {
 			log.Fatalf("error during writing output: %v", err)
 		}
 
-		fmt.Printf("\nAnalysis written to %s\n", *output)
+		fmt.Printf("\nAnalysis saved to %s\n", *output)
 	}
 
-	// Re-chunk every image with a fixed 512 KiB boundary
+	// Re-chunk every image with a fixed 512 KiB boundary by joining all image files into one byte stream (order by name) and
+	// then chunk at 512 KiB boundaries
 	if *compareFixed {
 
 		fmt.Printf("\nFixed 512 KiB Chunking Comparison...\n")
 
 		var fixedCorpus []nydus.ImageChunks
-		for _, ic := range corpus {
-			imgDir := filepath.Join(*exportDir, ic.Image)
-			chunks, err := nydus.FlattenImage(imgDir, 512*1024, ic.Image)
+		for _, allImageChunks := range corpus {
+			imgDir := filepath.Join(*exportDir, allImageChunks.Image)
+			chunks, err := nydus.FlattenImage(imgDir, 512*1024, allImageChunks.Image)
 			if err != nil {
-				log.Fatalf("error during flattening %s: %v", ic.Image, err)
+				log.Fatalf("error during flattening %s: %v", allImageChunks.Image, err)
 			}
+
 			var totalBytes uint64
-			for _, c := range chunks {
-				totalBytes += c.Size
+			for _, currChunk := range chunks {
+				totalBytes += currChunk.Size
 			}
+
 			fixedCorpus = append(fixedCorpus, nydus.ImageChunks{
-				Image:      ic.Image,
+				Image:      allImageChunks.Image,
 				TotalBytes: totalBytes,
 				Chunks:     chunks,
 			})
-			fmt.Printf("%s: %d fixed chunks\n", ic.Image, len(chunks))
+			fmt.Printf("%s: %d fixed chunks\n", allImageChunks.Image, len(chunks))
 		}
 
-		fixedMetrics := analysis.ComputeCorpusMetrics(fixedCorpus, sel)
-		fixedPairwise := analysis.ComputePairwiseOverlap(fixedCorpus, sel)
+		// Run overlap analysis with the new chunking
+		fixedMetrics := analysis.ComputeCorpusMetrics(fixedCorpus, chunkSelector)
+		fixedPairwise := analysis.ComputePairwiseOverlap(fixedCorpus, chunkSelector)
+
+		// Sort pairs by most bytes first for easier debugging
 		sort.Slice(fixedPairwise, func(i, j int) bool {
 			if fixedPairwise[i].SharedBytes != fixedPairwise[j].SharedBytes {
 				return fixedPairwise[i].SharedBytes > fixedPairwise[j].SharedBytes
@@ -326,13 +335,12 @@ func main() {
 			}
 			return fixedPairwise[i].ImageB < fixedPairwise[j].ImageB
 		})
-		fixedFrequencies := analysis.ComputeChunkFrequencies(fixedCorpus, sel)
+		fixedFrequencies := analysis.ComputeChunkFrequencies(fixedCorpus, chunkSelector)
 
-		// Coverage scenarios are omitted because fixed chunks have no access traces to simulate startup behaviour
 		fixedResult := AnalysisOutput{
 			Corpus:      fixedMetrics,
 			Pairwise:    fixedPairwise,
-			Scenarios:   nil,
+			Scenarios:   nil, // We dont have access logs for which chunks are accessed during startup for the new 512 KiB chunking
 			Frequencies: fixedFrequencies,
 		}
 
@@ -345,7 +353,7 @@ func main() {
 		}
 		fmt.Printf("\nFixed-chunk analysis saved to: %s\n", *fixedOutput)
 
-		// Summary JSON of metrics for both strategies
+		// Metrics for both strategies
 		type StrategySummary struct {
 			Name            string  `json:"name"`
 			DedupRatioBytes float64 `json:"dedup_ratio_bytes"`
@@ -355,6 +363,7 @@ func main() {
 			UniqueChunks    int     `json:"unique_chunks"`
 			TotalChunks     int     `json:"total_chunks"`
 		}
+
 		comparison := struct {
 			Strategies []StrategySummary `json:"strategies"`
 		}{

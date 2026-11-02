@@ -1,0 +1,5 @@
+node,role,phase,reason,failed_fetches
+aks-node-00000c,scale-out,scale-out,http 429,72
+aks-node-00000d,seed,before seed,connection refused,7
+aks-node-00000d,seed,seed,connection refused,13
+aks-node-00000e,scale-out,scale-out,http 429,17

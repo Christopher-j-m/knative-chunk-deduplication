@@ -6,8 +6,6 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
     -o /out/chunk-proxy ./cmd/chunk-proxy
 
-# The proxy shells out to nydus-image to read chunk tables from bootstraps;
-# the upstream snapshotter image carries a static build of it
 FROM ghcr.io/containerd/nydus-snapshotter:v0.15.0 AS nydus-tools
 
 FROM alpine:3.23

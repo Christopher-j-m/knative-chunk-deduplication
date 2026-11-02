@@ -102,7 +102,9 @@ for config in ${CONFIGS}; do
 
   case "${config}" in
     1) tag="oci" ;;
-    *) tag="nydus-none" ;;
+    # NYDUS_TAG picks another conversion of the same image, such as the
+    # compressed one that stock nydusd can read but the cache proxy cannot
+    *) tag="${NYDUS_TAG:-nydus-none}" ;;
   esac
 
   for entry in ${IMAGES}; do

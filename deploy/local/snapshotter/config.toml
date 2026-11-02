@@ -1,13 +1,11 @@
-# Snapshotter daemon config installed to /etc/nydus/config.toml on every node
-# by scripts/node-snapshotter.sh. The root lives under the k3s agent dir so the
-# snapshot mounts land on btrfs instead of nesting inside an overlayfs.
+# Settings of the nydus snapshotter
 version = 1
 root = "/var/lib/rancher/k3s/agent/containerd-nydus"
 address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
 daemon_mode = "multiple"
 [daemon]
 nydusd_path = "/opt/nydus/bin/nydusd"
-nydusd_config = "/etc/nydus/nydusd-config.json"
+nydusd_config = "/etc/nydus/nydusd-config.json" # Settings for the nydus daemon that fetches the image chunks when needed
 fs_driver = "fusedev"
 [snapshot]
 enable_kata_volume = false

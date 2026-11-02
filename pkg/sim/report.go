@@ -2,17 +2,18 @@ package sim
 
 import "strconv"
 
-// RunLabel names the inputs of one run the way the result CSVs record them.
+// Writer for building the csv rows of simulation results 
+
+// summary labels to recognize what run this rows refer to
 type RunLabel struct {
-	Trace       string
-	WorkingSets string
-	Policy      string
-	MapStrategy string
-	Placement   string
+	Trace       string // which traces were used
+	WorkingSets string // what set of images were used
+	Policy      string // ... eviction were used
+	MapStrategy string // how each function is pared with one of our images
+	Placement   string // pod placement strat
 }
 
-// ResultHeader names the columns of the campaign output CSV, in the same
-// order ResultRow emits them.
+// simulation result headers
 func ResultHeader() []string {
 	return []string{
 		"trace", "working_sets", "policy", "capacity_bytes", "nodes",
@@ -25,14 +26,14 @@ func ResultHeader() []string {
 	}
 }
 
-// ResultRow flattens one simulation run into CSV fields. The byte hit rate
-// covers only cluster-eligible traffic, meaning chunks not already on the
-// local node, so it isolates what the cluster cache contributed.
-func ResultRow(label RunLabel, cfg Config, capacity uint64, r Result) []string {
-	eligible := r.ClusterHitBytes + r.RegistryBytes
+// format the simulations results to a single csv row
+// also calculates the cluster hit rate based on the simulation result (since we have everything we need for it)
+// for data that wasnt already present on the node
+func ResultRow(label RunLabel, cfg Config, capacity uint64, simulationResult Result) []string {
+	eligible := simulationResult.ClusterHitBytes + simulationResult.RegistryBytes
 	rate := 0.0
 	if eligible > 0 {
-		rate = float64(r.ClusterHitBytes) / float64(eligible)
+		rate = float64(simulationResult.ClusterHitBytes) / float64(eligible)
 	}
 
 	registryChunkMs, cacheChunkMs := costColumns(cfg)
@@ -51,23 +52,23 @@ func ResultRow(label RunLabel, cfg Config, capacity uint64, r Result) []string {
 		registryChunkMs,
 		cacheChunkMs,
 		strconv.FormatInt(cfg.Seed, 10),
-		strconv.Itoa(r.Invocations),
-		strconv.Itoa(r.ColdStarts),
-		strconv.Itoa(r.SeedColdStarts),
-		strconv.Itoa(r.WarmStarts),
-		strconv.FormatUint(r.LocalBytes, 10),
-		strconv.FormatUint(r.ClusterHitBytes, 10),
-		strconv.FormatUint(r.RegistryBytes, 10),
+		strconv.Itoa(simulationResult.Invocations),
+		strconv.Itoa(simulationResult.ColdStarts),
+		strconv.Itoa(simulationResult.SeedColdStarts),
+		strconv.Itoa(simulationResult.WarmStarts),
+		strconv.FormatUint(simulationResult.LocalBytes, 10),
+		strconv.FormatUint(simulationResult.ClusterHitBytes, 10),
+		strconv.FormatUint(simulationResult.RegistryBytes, 10),
 		strconv.FormatFloat(rate, 'f', 4, 64),
-		strconv.Itoa(r.Evictions),
-		strconv.FormatUint(r.PeakStoredBytes, 10),
-		strconv.Itoa(r.NodesUsed),
-		strconv.Itoa(r.RegistryRequests()),
-		strconv.Itoa(r.PeakCacheRPS),
+		strconv.Itoa(simulationResult.Evictions),
+		strconv.FormatUint(simulationResult.PeakStoredBytes, 10),
+		strconv.Itoa(simulationResult.NodesUsed),
+		strconv.Itoa(simulationResult.RegistryRequests()),
+		strconv.Itoa(simulationResult.PeakCacheRPS),
 	}
 }
 
-// ClassHeader names the columns of the per-frequency-class CSV.
+// csv header for the function call metrics by frequency classes
 func ClassHeader() []string {
 	return []string{
 		"trace", "working_sets", "policy", "capacity_bytes", "nodes",
@@ -80,8 +81,8 @@ func ClassHeader() []string {
 	}
 }
 
-// ClassRows flattens one run into one row per frequency class; the latency
-// columns stay empty when the run carried no cost model.
+// format the simulation run results into one row for each of the 6 frequency classes
+// will be blank if no cost model estimation was specified
 func ClassRows(label RunLabel, cfg Config, capacity uint64, r Result) [][]string {
 	registryChunkMs, cacheChunkMs := costColumns(cfg)
 
@@ -120,7 +121,6 @@ func ClassRows(label RunLabel, cfg Config, capacity uint64, r Result) [][]string
 	return rows
 }
 
-// clusterCacheColumn says whether this run had a cluster tier at all
 func clusterCacheColumn(cfg Config) string {
 	if cfg.NoClusterCache {
 		return "no"
@@ -128,8 +128,6 @@ func clusterCacheColumn(cfg Config) string {
 	return "yes"
 }
 
-// costColumns prints the two per-chunk coefficients, or nothing when the run
-// charged no cost model and so reports fetch counts rather than times
 func costColumns(cfg Config) (string, string) {
 	if cfg.Cost == nil {
 		return "", ""
@@ -138,16 +136,16 @@ func costColumns(cfg Config) (string, string) {
 		strconv.FormatFloat(cfg.Cost.CacheChunkMs, 'f', -1, 64)
 }
 
-// quantileColumns reads the requested quantiles off a histogram, leaving the
-// columns empty when the run recorded none
-func quantileColumns(l *Latency, quantiles ...float64) []string {
+// returns a list of waiting times from a run based on the specific quantiles
+// blank if nothing was recorded
+func quantileColumns(recordedLatency *Latency, quantiles ...float64) []string {
 	columns := make([]string, 0, len(quantiles))
-	for _, q := range quantiles {
-		if l == nil {
+	for _, currQuantile := range quantiles {
+		if recordedLatency == nil {
 			columns = append(columns, "")
 			continue
 		}
-		columns = append(columns, strconv.FormatInt(l.Quantile(q), 10))
+		columns = append(columns, strconv.FormatInt(recordedLatency.Quantile(currQuantile), 10))
 	}
 	return columns
 }

@@ -7,182 +7,175 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
-
 	"nydus-cluster-cache/pkg/store"
 )
 
-// ErrNotFound is returned when no chunk is associated with the requested hash
-// and no loader was supplied
+// The error we return when a chunk is not found in the cache
 var ErrNotFound = errors.New("chunk not found")
 
-// Options controls cache-wide behavior. Zero values mean "no policy".
+// Configure the cache
 type Options struct {
-	// capacity in bytes; zero disables eviction so the cache grows unbounded
-	CapacityBytes uint64
-
-	// Metrics receives the running counters; may be nil for tests
-	Metrics *Metrics
+	CapacityBytes uint64   // max bytes capacity of the cache => above this eviction strategy kicks in, 0 = unlimited capacity (and no eviction)
+	Metrics       *Metrics // counters of hits/misses/latency/histograms and whatever we may add in the future for Prometheus
 }
 
-// Cache is the transport-agnostic facade that protocol code talks to.
-// It coordinates the backing store, the eviction policy, and the metrics.
+// Wrapper of the underlying store of the cache with additional metrics and eviction strategy
 type Cache struct {
-	store   store.Store
-	lru     *LRU
-	metrics *Metrics
-
-	loader singleflight.Group
-
-	hits   atomic.Uint64
-	misses atomic.Uint64
+	store   store.Store        // the store that actually holds the chunks
+	lru     *LRU               // currently the only eviction strategy implemented
+	metrics *Metrics           // metrics for Prometheus
+	loader  singleflight.Group // group that contains all current loaders for a given hash, so that concurrent requests for the same hash are collapsed into one upstream fetch
+	hits    atomic.Uint64      //
+	misses  atomic.Uint64
 }
 
-// Loader fetches the payload for a hash from an upstream source (typically the
-// container registry). Returning a reader leaves byte handling to
-// the cache.
+// For a chunk hash, the loader fkt is called to fetch the chunk from the remote registry if not found in cache
+// Returns a reader (NOT the chunk slice itself) to the chunk data or an error if fetching failed
 type Loader func(hash string) (io.Reader, error)
 
-// New creates a cache facade backed by the given store. Eviction is wired only
-// when CapacityBytes > 0.
-func New(backing store.Store, opts Options) *Cache {
-	c := &Cache{store: backing, metrics: opts.Metrics}
+// Create a new cache including the underlying store and the cache settings (capacity, metrics)
+func New(cacheStore store.Store, opts Options) *Cache {
+	newCache := &Cache{store: cacheStore, metrics: opts.Metrics}
 	if opts.CapacityBytes > 0 {
-		c.lru = NewLRU(backing, opts.CapacityBytes)
+		newCache.lru = NewLRU(cacheStore, opts.CapacityBytes)
 	}
-	return c
+
+	return newCache
 }
 
-// tryGet performs a raw store lookup and observes latency. It does NOT touch
-// hit/miss counters, making it safe to call from GetOrLoad without inflating
-// metrics.
-func (c *Cache) tryGet(hash string) (io.ReadCloser, error) {
-	start := time.Now()
-	reader, err := c.store.Get(hash)
-	c.observeLatency(start)
+// Measurement function to measure the latency of cache lookups
+func (cache *Cache) tryGet(hash string) (io.ReadCloser, error) {
+	startTime := time.Now()
+	reader, err := cache.store.Get(hash)
+
+	cache.observeLatency(startTime)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrNotFound
 	}
+
 	return reader, err
 }
 
-// recordHit increments the hit counters and notifies the LRU policy.
-func (c *Cache) recordHit(hash string) {
-	c.hits.Add(1)
-	if c.metrics != nil {
-		c.metrics.Hits.Inc()
+// Increments the cache hit counters and notifies the eviction strategy module that the chunk was accessed
+// => We only use LRU, so we dont need to differ between strategies yet
+func (cache *Cache) recordHit(hash string) {
+	cache.hits.Add(1)
+	if cache.metrics != nil {
+		cache.metrics.Hits.Inc()
 	}
-	if c.lru != nil {
-		c.lru.RecordAccess(hash)
-	}
-}
-
-// recordMiss increments the miss counters.
-func (c *Cache) recordMiss() {
-	c.misses.Add(1)
-	if c.metrics != nil {
-		c.metrics.Misses.Inc()
+	if cache.lru != nil {
+		cache.lru.RecordAccess(hash)
 	}
 }
 
-// Get returns the stored payload for hash. On a miss it returns ErrNotFound.
-func (c *Cache) Get(hash string) (io.ReadCloser, error) {
-	reader, err := c.tryGet(hash)
+func (cache *Cache) recordMiss() {
+	cache.misses.Add(1)
+	if cache.metrics != nil {
+		cache.metrics.Misses.Inc()
+	}
+}
+
+// Returns a reader object to the chunk for the given hash if existing, else ErrNotFound
+func (cache *Cache) Get(hash string) (io.ReadCloser, error) {
+	chunkReader, err := cache.tryGet(hash)
 	if errors.Is(err, ErrNotFound) {
-		c.recordMiss()
+		cache.recordMiss()
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	c.recordHit(hash)
-	return reader, nil
+
+	cache.recordHit(hash)
+	return chunkReader, nil
 }
 
-// Put stores payload under hash and notifies the eviction policy and metrics.
-func (c *Cache) Put(hash string, payload io.Reader) error {
-	counter := &countingReader{r: payload}
-	if err := c.store.Put(hash, counter); err != nil {
+// Inserts a chunk in the cache (overwrites possible)
+func (cache *Cache) Put(hash string, newChunk io.Reader) error {
+	newChunkBytes := &countingReader{reader: newChunk}
+	if err := cache.store.Put(hash, newChunkBytes); err != nil {
 		return err
 	}
-	if c.metrics != nil {
-		c.metrics.PutBytes.Add(float64(counter.bytes))
-		c.metrics.StoredBytes.Set(float64(c.store.StoredBytes()))
-		c.metrics.StoredChunks.Set(float64(c.store.ChunkCount()))
+
+	if cache.metrics != nil {
+		cache.metrics.PutBytes.Add(float64(newChunkBytes.bytes))
+		cache.metrics.StoredBytes.Set(float64(cache.store.StoredBytes()))
+		cache.metrics.StoredChunks.Set(float64(cache.store.ChunkCount()))
 	}
-	if c.lru != nil {
-		c.lru.RecordInsert(hash, counter.bytes)
+	if cache.lru != nil {
+		cache.lru.RecordInsert(hash, newChunkBytes.bytes)
 	}
+
 	return nil
 }
 
-// Exists reports whether hash is currently held in the backing store.
-func (c *Cache) Exists(hash string) bool {
-	return c.store.Exists(hash)
+func (cache *Cache) Exists(hash string) bool {
+	return cache.store.Exists(hash)
 }
 
-// GetOrLoad serves cached bytes when available. On a miss it invokes loader
-// behind a singleflight group keyed by hash, so concurrent callers share one
-// upstream fetch.
-//
-// Metric semantics:
-//   - Fast path (cache already warm): 1 hit per caller.
-//   - Singleflight winner (actually runs the loader): 1 miss.
-//   - Singleflight waiters (share the winner's result): 1 hit each.
-func (c *Cache) GetOrLoad(hash string, loader Loader) (io.ReadCloser, error) {
-	// fast path — chunk already in store
-	if reader, err := c.tryGet(hash); err == nil {
-		c.recordHit(hash)
+// Returns a reader to the chunk for the specified hash
+// If the chunk is not found in the cache, the loader function gets triggered to fetch the said missing chunk in order to store it in the cache
+// All concurrent requests for the same hash are collapsed into one upstream fetch via singleflight
+// => We dont fetch the missing chunk multiple times, but only once (for first arriving request) and the other concurrent requests need to wait for the result of the first one
+func (cache *Cache) GetOrLoad(hash string, loader Loader) (io.ReadCloser, error) {
+	// Chunk already in store
+	if reader, err := cache.tryGet(hash); err == nil {
+		cache.recordHit(hash)
 		return reader, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
 
-	// slow path — collapse concurrent misses via singleflight
-	// ranLoader is set inside the closure, which executes exactly once on the
-	// winning goroutine; waiters never execute the closure, so their ranLoader
-	// stays false and they correctly record a hit after the shared fetch
+	// Merge concurrent misses via singleflight so fetch the missing chunk for this iteration only once from the remote registry
+	// RanLoader is set to true for the caller that actually triggered the loader to fetch the missing chunk, the others are waiters and its value is false for them
 	ranLoader := false
-	_, err, _ := c.loader.Do(hash, func() (any, error) {
+	_, err, _ := cache.loader.Do(hash, func() (any, error) {
 		ranLoader = true
-		c.recordMiss()
+		cache.recordMiss()
 		payload, lerr := loader(hash)
 		if lerr != nil {
 			return nil, lerr
 		}
-		return nil, c.Put(hash, payload)
+		return nil, cache.Put(hash, payload)
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	// This is a caller that needed to wait
 	if !ranLoader {
-		// waited for the winner — chunk now in store
-		c.recordHit(hash)
+		cache.recordHit(hash)
 	}
-	// tryGet here does NOT touch counters — hit/miss was recorded above
-	return c.tryGet(hash)
+
+	return cache.tryGet(hash)
 }
 
-// HitCount returns the total number of cache hits recorded since creation.
-func (c *Cache) HitCount() uint64 { return c.hits.Load() }
+// Returns the total number of cache hits since creation of this cache
+func (cache *Cache) HitCount() uint64 { return cache.hits.Load() }
 
-// MissCount returns the total number of cache misses recorded since creation.
-func (c *Cache) MissCount() uint64 { return c.misses.Load() }
+// ...total number of cache misses...
+func (cache *Cache) MissCount() uint64 { return cache.misses.Load() }
 
-func (c *Cache) observeLatency(start time.Time) {
-	if c.metrics == nil {
+// Records the seconds from a given start time to now that this function is invoked
+func (cache *Cache) observeLatency(start time.Time) {
+	if cache.metrics == nil {
 		return
 	}
 	elapsed := time.Since(start).Seconds()
-	c.metrics.GetLatencySeconds.Observe(elapsed)
+
+	// Store the latency in s to the prometheus histogram
+	cache.metrics.GetLatencySeconds.Observe(elapsed)
 }
 
+// Wrapper around an io.Reader that allows us to count the number of bytes read
 type countingReader struct {
-	r     io.Reader
-	bytes uint64
+	reader io.Reader
+	bytes  uint64
 }
 
-func (cr *countingReader) Read(p []byte) (int, error) {
-	n, err := cr.r.Read(p)
-	cr.bytes += uint64(n)
-	return n, err
+// Reads from the underlying reader and counts the number of bytes read
+func (countingReader *countingReader) Read(payload []byte) (int, error) {
+	readBytes, err := countingReader.reader.Read(payload)
+	countingReader.bytes += uint64(readBytes)
+	return readBytes, err
 }

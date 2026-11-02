@@ -6,18 +6,20 @@ import (
 	"os"
 )
 
-// Catalog is the image inventory with every chunk interned to a small
-// integer, so the engine compares ids instead of hashes and node-local
-// sets can be bitsets.
-type Catalog struct {
-	Images     []string
-	Sizes      []uint64
-	Sets       [][]uint32
-	ImageBytes []uint64
+// Load all the container images, change each of their hashes with a short number (for faster comparison)
+// that will also be used for the bit position in bitset
 
-	index map[string]int32
+// Catalog of all container images with their short number, corresponding chunks and size
+type Catalog struct {
+	Images     []string         // Container images
+	Sizes      []uint64         // Each chunks size (bytes)
+	Sets       [][]uint32       // Each unique chunk gets a short number assigned => Contains the chunk number that the corresponding image contains
+	ImageBytes []uint64         // image size (bytes) of image via sum of chunk sizes
+	index      map[string]int32 // lookup image name -> image number
 }
 
+// Format of the input json file for an extracted image and its corresponding chunks
+// Will be used to load these json files in LoadCatalog() func
 type imageChunksFile struct {
 	Image  string `json:"image"`
 	Chunks []struct {
@@ -26,67 +28,78 @@ type imageChunksFile struct {
 	} `json:"chunks"`
 }
 
-// LoadCatalog reads the per-image chunk inventory written by the capture
-// script or the catalog generator and interns it. Chunk ids follow first
-// appearance across the file, image indices follow file order.
-func LoadCatalog(path string) (*Catalog, error) {
-	raw, err := os.ReadFile(path)
+// Read the image data json file that need to be created via /scripts/gen-churn-catalog.py
+// For each image it assigns each chunk, it hasnt seen in other container images already, a number
+// If it has already seen a specific chunk, it just references this chunk by the previously, already assigned number
+func LoadCatalog(imageFilePath string) (*Catalog, error) {
+	imageFileData, err := os.ReadFile(imageFilePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read catalog: %w", err)
+		return nil, fmt.Errorf("error while reading image data file: %w", err)
 	}
 
 	var images []imageChunksFile
-	if err := json.Unmarshal(raw, &images); err != nil {
-		return nil, fmt.Errorf("failed to parse catalog: %w", err)
+	if err := json.Unmarshal(imageFileData, &images); err != nil {
+		return nil, fmt.Errorf("error while parsing catalog: %w", err)
 	}
 
-	catalog := &Catalog{index: map[string]int32{}}
+	imageCatalog := &Catalog{index: map[string]int32{}}
 	ids := map[string]uint32{}
-	for _, img := range images {
-		if _, dup := catalog.index[img.Image]; dup {
-			return nil, fmt.Errorf("image %s listed twice", img.Image)
+	for _, currImage := range images {
+		if _, dup := imageCatalog.index[currImage.Image]; dup {
+			return nil, fmt.Errorf("image %s found twice", currImage.Image)
 		}
-		catalog.index[img.Image] = int32(len(catalog.Images))
-		catalog.Images = append(catalog.Images, img.Image)
 
-		// the same chunk can appear once per file reference, count it once
+		// Assign the image the next available number (counting up)
+		imageCatalog.index[currImage.Image] = int32(len(imageCatalog.Images))
+		imageCatalog.Images = append(imageCatalog.Images, currImage.Image)
+
 		seen := map[uint32]bool{}
 		var set []uint32
 		var bytes uint64
-		for _, c := range img.Chunks {
-			id, ok := ids[c.Hash]
+		for _, currChunk := range currImage.Chunks {
+			id, ok := ids[currChunk.Hash]
+
+			// Not seen yet => Assign next available number
 			if !ok {
-				id = uint32(len(catalog.Sizes))
-				ids[c.Hash] = id
-				catalog.Sizes = append(catalog.Sizes, c.Size)
+				id = uint32(len(imageCatalog.Sizes))
+				ids[currChunk.Hash] = id
+				imageCatalog.Sizes = append(imageCatalog.Sizes, currChunk.Size)
 			}
+
+			// We already seen this chunk and assigned a number to it
 			if seen[id] {
 				continue
 			}
+
 			seen[id] = true
 			set = append(set, id)
-			bytes += catalog.Sizes[id]
+			bytes += imageCatalog.Sizes[id]
 		}
-		catalog.Sets = append(catalog.Sets, set)
-		catalog.ImageBytes = append(catalog.ImageBytes, bytes)
+
+		imageCatalog.Sets = append(imageCatalog.Sets, set)
+		imageCatalog.ImageBytes = append(imageCatalog.ImageBytes, bytes)
 	}
-	return catalog, nil
+
+	return imageCatalog, nil
 }
 
-// Index returns the position of an image by name.
-func (c *Catalog) Index(image string) (int32, bool) {
-	i, ok := c.index[image]
-	return i, ok
+// Returns the position in the catalog image by name (and if its contained or not)
+func (imageCatalog *Catalog) Index(image string) (int32, bool) {
+	index, ok := imageCatalog.index[image]
+	return index, ok
 }
 
-// RefCounts counts how many images hold each chunk, which the refcount
-// eviction policy ranks on.
-func (c *Catalog) RefCounts() []int {
-	refs := make([]int, len(c.Sizes))
-	for _, set := range c.Sets {
+// Counts for each chunk in how many images it is contained
+// => refcount eviction strat needs this
+func (imageCatalog *Catalog) RefCounts() []int {
+	refs := make([]int, len(imageCatalog.Sizes))
+
+	// For each image, look into each of its chunks and increment their individual counters
+	for _, set := range imageCatalog.Sets {
 		for _, id := range set {
 			refs[id]++
 		}
 	}
+
 	return refs
 }

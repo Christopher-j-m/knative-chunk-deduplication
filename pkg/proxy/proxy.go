@@ -1,4 +1,5 @@
-// pkg/proxy/proxy.go
+// Nydus http proxy backend only can ask for byte ranges of blobs, but the cluster stores chunks by digest
+// => This proxy sits on every cluster node and translates a given byte range to chunk digests
 package proxy
 
 import (
@@ -14,97 +15,100 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
-
 	"nydus-cluster-cache/pkg/blobindex"
+	"nydus-cluster-cache/pkg/nydus"
 )
 
-// Resolver maps a blob id and byte range to the chunks it covers and the source
-// repository.
+// Resolves a blob id and byte range to the specific chunk digests and corresponding registry repo
 type Resolver interface {
 	Resolve(blobID string, start, end uint64) ([]blobindex.Chunk, bool)
 	BlobRepo(blobID string) (string, bool)
 }
 
-// Cache reads and writes chunk payloads keyed by content digest.
+// Allows reading/writing chunks by their corresponding digest to the cluster cache
 type Cache interface {
 	Get(ctx context.Context, digest string) (io.ReadCloser, bool, error)
 	Put(ctx context.Context, digest string, body io.Reader) error
 }
 
-// Registry fetches blob bytes from the origin on a miss.
+// Allows to fetch blob byte ranges from a remote registry in case of cache miss
 type Registry interface {
 	GetBlobRange(ctx context.Context, repo, blob string, start, end uint64) (io.ReadCloser, error)
 	HeadBlob(ctx context.Context, repo, blob string) (uint64, error)
 }
 
-// Options tunes the proxy. Zero values select working defaults.
+// Settings for the cache proxy
 type Options struct {
-	CacheTimeout     time.Duration
-	PopulateWorkers  int
-	PopulateQueue    int
-	BreakerThreshold int
-	BreakerCooldown  time.Duration
+	CacheTimeout     time.Duration // Max. waiting time for a cache read before going to the remote registry instead
+	PopulateWorkers  int           // amount of workers that upload freshly received chunks to the cache, default: 8
+	PopulateQueue    int           // amount of uploads that are allowed to wait for a worker before new ones are dropped
+	BreakerThreshold int           // amount of failed cache requests before we wait for breakerCooldown
+	BreakerCooldown  time.Duration // timeout (s) until we start sending requests to a previously failed cache again
 
-	// CacheDisabled bypasses the cluster cache entirely: every chunk is fetched
-	// from the origin registry and no populate is scheduled. This is the
-	// node-local-only benchmark configuration
+	// Whether we ignore the cluster cache path and send requests directly to the remote registry
 	CacheDisabled bool
 
-	// FetchConcurrency caps how many of a request's chunks are fetched at the
-	// same time. One nydusd read can span hundreds of small chunks, and paying
-	// a network round trip for each in turn takes longer than nydusd waits
-	// before cancelling the read
+	// max. amount of chunks that we fetch in parallel within one request
 	FetchConcurrency int
 
-	// Refresh re-reads the blob index when a requested blob is unknown, so a
-	// bootstrap that appeared between periodic rescans is picked up before the
-	// request is failed. Nil disables the retry
+	// fct to re-read the blob metadata files to build the blob index
 	Refresh func(context.Context) error
+
+	// Counters this proxy reports, an unregistered set is used when left empty
+	Metrics *Metrics
+
+	// Ask the registry at the same time as the cache instead of after a miss,
+	// a hit cancels the registry request. Saves the lookup on a miss at the price of extra registry requests
+	ParallelMissFetch bool
 }
 
-func (o Options) withDefaults() Options {
-	if o.CacheTimeout == 0 {
-		o.CacheTimeout = 50 * time.Millisecond
+// Set the default settings of this proxy
+func (proxyOptions Options) withDefaults() Options {
+	if proxyOptions.CacheTimeout == 0 {
+		proxyOptions.CacheTimeout = 50 * time.Millisecond
 	}
-	if o.PopulateWorkers == 0 {
-		o.PopulateWorkers = 8
+	if proxyOptions.PopulateWorkers == 0 {
+		proxyOptions.PopulateWorkers = 8
 	}
-	if o.PopulateQueue == 0 {
-		o.PopulateQueue = 1024
+	if proxyOptions.PopulateQueue == 0 {
+		proxyOptions.PopulateQueue = 1024
 	}
-	if o.BreakerThreshold == 0 {
-		o.BreakerThreshold = 5
+	if proxyOptions.BreakerThreshold == 0 {
+		proxyOptions.BreakerThreshold = 5
 	}
-	if o.BreakerCooldown == 0 {
-		o.BreakerCooldown = 2 * time.Second
+	if proxyOptions.BreakerCooldown == 0 {
+		proxyOptions.BreakerCooldown = 2 * time.Second
 	}
-	if o.FetchConcurrency == 0 {
-		o.FetchConcurrency = 16
+	if proxyOptions.FetchConcurrency == 0 {
+		proxyOptions.FetchConcurrency = 16
 	}
-	return o
+	if proxyOptions.Metrics == nil {
+		proxyOptions.Metrics = NewMetrics(nil)
+	}
+	return proxyOptions
 }
 
-// Handler serves nydusd's http-proxy backend protocol. Create it with NewHandler
-// and call Close when done to stop the populate pool.
+// Serves the http requests from nydusd
 type Handler struct {
+	// Components
 	resolver Resolver
 	cache    Cache
 	registry Registry
 	opts     Options
 
+	// Whether skipping the cache and go to the remote registry immediately or not
 	cacheEnabled bool
 
-	loader    singleflight.Group
-	refresher singleflight.Group
-	breaker   *breaker
-	pool      *populatePool
-	mux       *http.ServeMux
+	loader    singleflight.Group // Merge multiple concurrent requests for the same chunk into one
+	refresher singleflight.Group // ... concurrent blob index re-scans requests into one
+	breaker   *breaker           // failure breaker in case of multiple subsequent failed cache requests
+	pool      *populatePool      // Pool of workers and queue to upload recently fetched chunks from remote registry to the cache
+	mux       *http.ServeMux     // request router
 }
 
-// NewHandler wires a proxy handler over the given index, cache, and registry.
 func NewHandler(resolver Resolver, cache Cache, registry Registry, opts Options) *Handler {
 	opts = opts.withDefaults()
-	h := &Handler{
+	newHandler := &Handler{
 		resolver:     resolver,
 		cache:        cache,
 		registry:     registry,
@@ -112,111 +116,126 @@ func NewHandler(resolver Resolver, cache Cache, registry Registry, opts Options)
 		cacheEnabled: !opts.CacheDisabled,
 		breaker:      newBreaker(opts.BreakerThreshold, opts.BreakerCooldown),
 	}
-	h.pool = newPopulatePool(opts.PopulateWorkers, opts.PopulateQueue, h.populate)
-	h.mux = http.NewServeMux()
-	h.mux.HandleFunc("/", h.serve)
-	return h
+
+	newHandler.pool = newPopulatePool(opts.PopulateWorkers, opts.PopulateQueue, newHandler.populate)
+	newHandler.mux = http.NewServeMux()
+	newHandler.mux.HandleFunc("/", newHandler.serve)
+
+	return newHandler
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.ServeHTTP(w, r) }
+func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	handler.mux.ServeHTTP(writer, request)
+}
 
-// Close stops the populate pool. The handler must not be used afterward.
-func (h *Handler) Close() { h.pool.stop() }
+// Stops the populate pool (handler cant be used afterwards)
+func (handler *Handler) Close() { handler.pool.stop() }
 
-func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
-	blob := strings.TrimPrefix(r.URL.Path, "/")
-	repo, ok := h.resolver.BlobRepo(blob)
+// Starting point for every nydusd request:
+// 1) Checks if we know the repo of the blob, if not re-scan blob index
+// 2) Get blob size from origin repo & then check cache before going to the remote registry for chunk
+func (handler *Handler) serve(writer http.ResponseWriter, request *http.Request) {
+	// Check if we know the blob repo via blob index
+	blob := strings.TrimPrefix(request.URL.Path, "/")
+	targetRegistryRepo, ok := handler.resolver.BlobRepo(blob)
+	// Not known yet => re-scan blob index and try again
 	if !ok {
-		repo, ok = h.retryAfterRefresh(r.Context(), blob)
+		targetRegistryRepo, ok = handler.retryAfterRefresh(request.Context(), blob)
 	}
+	// Still not known after retry => stop attempting
 	if !ok {
-		h.fail(w, r, http.StatusBadGateway, "unknown blob")
+		handler.fail(writer, request, http.StatusBadGateway, "unknown blob")
 		return
 	}
 
-	switch r.Method {
+	switch request.Method {
 	case http.MethodHead:
-		h.serveHead(w, r, repo, blob)
+		handler.serveHead(writer, request, targetRegistryRepo, blob)
 	case http.MethodGet:
-		h.serveGet(w, r, repo, blob)
+		handler.serveGet(writer, request, targetRegistryRepo, blob)
 	default:
-		h.fail(w, r, http.StatusMethodNotAllowed, "method not allowed")
+		handler.fail(writer, request, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
-// retryAfterRefresh re-reads the blob index and looks the blob up once more.
-// A bootstrap written between periodic rescans becomes visible here, which is
-// what saves the first reads against a freshly mounted image.
-func (h *Handler) retryAfterRefresh(ctx context.Context, blob string) (string, bool) {
-	if h.opts.Refresh == nil {
+// re-reads the blob index and looks the blob up once more.
+func (handler *Handler) retryAfterRefresh(ctx context.Context, blob string) (string, bool) {
+	// Check if the refresh function is actually defined
+	if handler.opts.Refresh == nil {
 		return "", false
 	}
 
-	// nydusd issues many reads at once when a fresh image mounts, so concurrent
-	// misses collapse into a single index refresh
-	if _, err, _ := h.refresher.Do("refresh", func() (any, error) {
-		return nil, h.opts.Refresh(ctx)
+	// nydusd issues many reads at once when a fresh image mounts, so concurrent misses turn into a single index refresh
+	if _, err, _ := handler.refresher.Do("refresh", func() (any, error) {
+		return nil, handler.opts.Refresh(ctx)
 	}); err != nil {
 		return "", false
 	}
-	return h.resolver.BlobRepo(blob)
+	return handler.resolver.BlobRepo(blob)
 }
 
-// fail sends an error response and logs it with enough request context to
-// reconstruct what the nydusd on the other end of the socket was asking for
-func (h *Handler) fail(w http.ResponseWriter, r *http.Request, status int, message string) {
-	log.Printf("%s %s range=%q -> %d: %s", r.Method, r.URL.Path, r.Header.Get("Range"), status, message)
-	http.Error(w, message, status)
+// Debugging function that sends an error and logs the corresponding context for easier debugging
+func (handler *Handler) fail(writer http.ResponseWriter, request *http.Request, status int, message string) {
+	log.Printf("%s %s range=%q -> %d: %s", request.Method, request.URL.Path, request.Header.Get("Range"), status, message)
+	http.Error(writer, message, status)
 }
 
-func (h *Handler) serveHead(w http.ResponseWriter, r *http.Request, repo, blob string) {
-	size, err := h.registry.HeadBlob(r.Context(), repo, blob)
+// Sends a head-request to the remote registry to get the blob size (in bytes)
+func (handler *Handler) serveHead(writer http.ResponseWriter, request *http.Request, repo, blob string) {
+	blobSizeBytes, err := handler.registry.HeadBlob(request.Context(), repo, blob)
 	if err != nil {
-		h.fail(w, r, http.StatusBadGateway, err.Error())
-		return
-	}
-	w.Header().Set("Content-Length", strconv.FormatUint(size, 10))
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.WriteHeader(http.StatusOK)
-}
-
-func (h *Handler) serveGet(w http.ResponseWriter, r *http.Request, repo, blob string) {
-	start, end, err := parseRange(r.Header.Get("Range"))
-	if err != nil {
-		h.fail(w, r, http.StatusBadRequest, err.Error())
+		handler.fail(writer, request, http.StatusBadGateway, err.Error())
 		return
 	}
 
-	chunks, aligned := h.resolver.Resolve(blob, start, end)
+	writer.Header().Set("Content-Length", strconv.FormatUint(blobSizeBytes, 10))
+	writer.Header().Set("Content-Type", "application/octet-stream")
+	writer.WriteHeader(http.StatusOK)
+}
+
+// Sends a get request to the cluster cache after receiving a nydusd blob range request
+func (handler *Handler) serveGet(writer http.ResponseWriter, request *http.Request, repo, blob string) {
+	// Parse range from the request
+	start, end, err := parseRange(request.Header.Get("Range"))
+	if err != nil {
+		handler.fail(writer, request, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Resolve the range to the specific chunks
+	chunks, aligned := handler.resolver.Resolve(blob, start, end)
+	// If the range doesnt start and end cleanly at chunk borders => request range from registry instead
 	if !aligned {
-		h.passthrough(w, r, repo, blob, start, end)
+		handler.passthrough(writer, request, repo, blob, start, end)
 		return
 	}
 
-	payload, err := h.fetchChunks(r.Context(), repo, blob, chunks)
+	// Fetch the chunks in the range in parallel
+	payload, err := handler.fetchChunks(request.Context(), repo, blob, chunks)
 	if err != nil {
-		h.fail(w, r, http.StatusBadGateway, err.Error())
+		handler.fail(writer, request, http.StatusBadGateway, err.Error())
 		return
 	}
 
-	writePartial(w, start, end, payload)
+	// Respond with 206 and chunk bytes in payload
+	writePartial(writer, start, end, payload)
 }
 
-// fetchChunks gathers every chunk of one request, fetching up to
-// FetchConcurrency of them in parallel while keeping the results in request
-// order. The first failure cancels the chunks not yet started.
-func (h *Handler) fetchChunks(ctx context.Context, repo, blob string, chunks []blobindex.Chunk) ([][]byte, error) {
+// Fetch every chunk of a request (in parallel depending on proxy setting FetchConcurrency)
+// => Keeps the chunks in order and the following chunks are still fetched (even though 502 resp is sent early)
+func (handler *Handler) fetchChunks(ctx context.Context, repo, blob string, chunks []blobindex.Chunk) ([][]byte, error) {
 	payload := make([][]byte, len(chunks))
 	group, ctx := errgroup.WithContext(ctx)
-	group.SetLimit(h.opts.FetchConcurrency)
+	group.SetLimit(handler.opts.FetchConcurrency)
 
-	for i, chunk := range chunks {
+	// Attempt to fetch every requested chunk
+	for iteration, currChunk := range chunks {
 		group.Go(func() error {
-			data, err := h.fetchChunk(ctx, repo, blob, chunk)
+			data, err := handler.fetchChunk(ctx, repo, blob, currChunk)
 			if err != nil {
 				return err
 			}
-			payload[i] = data
+			payload[iteration] = data
 			return nil
 		})
 	}
@@ -227,103 +246,184 @@ func (h *Handler) fetchChunks(ctx context.Context, repo, blob string, chunks []b
 	return payload, nil
 }
 
-// passthrough serves a byte range that does not map to whole chunks straight from
-// the registry without caching, used for blob-metadata tails and any unaligned
-// request.
-func (h *Handler) passthrough(w http.ResponseWriter, r *http.Request, repo, blob string, start, end uint64) {
-	body, err := h.registry.GetBlobRange(r.Context(), repo, blob, start, end)
+// Fetches a byte range directly from registry
+// This may be needed if the byte range doesnt align cleanly with the chunk borders
+func (handler *Handler) passthrough(writer http.ResponseWriter, request *http.Request, repo, blob string, start, end uint64) {
+	body, err := handler.registry.GetBlobRange(request.Context(), repo, blob, start, end)
 	if err != nil {
-		h.fail(w, r, http.StatusBadGateway, err.Error())
+		handler.opts.Metrics.recordRegistryFailure(err)
+		handler.fail(writer, request, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer body.Close()
 
 	data, err := io.ReadAll(body)
 	if err != nil {
-		h.fail(w, r, http.StatusBadGateway, err.Error())
+		handler.opts.Metrics.recordRegistryFailure(err)
+		handler.fail(writer, request, http.StatusBadGateway, err.Error())
 		return
 	}
-	writePartial(w, start, end, [][]byte{data})
+	writePartial(writer, start, end, [][]byte{data})
 }
 
-// fetchChunk returns a chunk's bytes, collapsing concurrent fetches for the same
-// digest. It serves from the cache, falls back to the registry on a miss or while
-// the breaker is open, and schedules an async populate after a registry fetch.
-func (h *Handler) fetchChunk(ctx context.Context, repo, blob string, chunk blobindex.Chunk) ([]byte, error) {
-	v, err, _ := h.loader.Do(chunk.Digest, func() (any, error) {
-		// The fetch deliberately outlives the caller that started it: nydusd
-		// cancels and retries slow reads, and a cancellation must not poison
-		// the result for the other callers collapsed onto this fetch
+// Returns a single chunk while merging concurrent requests for the same digest
+// This happens preferably from the cahce before falling back on the remote registry
+// due to cache misses or failure
+func (handler *Handler) fetchChunk(ctx context.Context, repo, blob string, chunk blobindex.Chunk) ([]byte, error) {
+	// The loader is a singleflight group => merge concurrent requests
+	result, err, _ := handler.loader.Do(chunk.Digest, func() (any, error) {
+
+		// Add a 1 min limit for receiving the the chunk in a dedicated context
+		// Sometimes nydus cancels slow responses and in that case there may be other requests
+		// waiting for the result as well that still need it, regardless if the initial request got canceled
 		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
 
-		if h.cacheEnabled && !h.breaker.open() {
-			if data, ok := h.tryCache(fetchCtx, chunk.Digest); ok {
+		useCache := handler.cacheEnabled && !handler.breaker.open()
+
+		// Ask the registry while the cache lookup is still running, so a miss costs no extra wait
+		if useCache && handler.opts.ParallelMissFetch {
+			return handler.fetchCacheAndRegistryTogether(fetchCtx, repo, blob, chunk)
+		}
+
+		// Attempt to fetch it from cache first
+		if useCache {
+			if data, ok := handler.tryCache(fetchCtx, chunk.Digest); ok {
 				return data, nil
 			}
 		}
 
-		body, err := h.registry.GetBlobRange(fetchCtx, repo, blob, chunk.Offset, chunk.Offset+chunk.Size-1)
+		// ...before going to the source registry
+		data, err := handler.fetchFromRegistry(fetchCtx, repo, blob, chunk)
 		if err != nil {
-			return nil, fmt.Errorf("registry fetch %s: %w", chunk.Digest, err)
-		}
-		defer body.Close()
-
-		data, err := io.ReadAll(body)
-		if err != nil {
-			return nil, fmt.Errorf("read registry body %s: %w", chunk.Digest, err)
+			return nil, err
 		}
 
-		if h.cacheEnabled && !h.breaker.open() {
-			h.pool.submit(chunk.Digest, data)
+		// Cache the newly fetched chunk, unless the lookup above just found the cache down
+		if handler.cacheEnabled && !handler.breaker.open() {
+			handler.pool.submit(chunk.Digest, data)
 		}
 		return data, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	// This slice is shared with every concurrent caller for the same digest, so callers must treat it as read-only
-	return v.([]byte), nil
+
+	// This arr is apparently shared with every concurrent caller for the same digest, so callers must treat it as read-only!
+	return result.([]byte), nil
 }
 
-// tryCache reads a chunk from the cache under the configured timeout, updating the
-// breaker. A clean miss returns ok=false with the breaker counted as a success
-// because the cache was reachable.
-func (h *Handler) tryCache(ctx context.Context, digest string) ([]byte, bool) {
-	cctx, cancel := context.WithTimeout(ctx, h.opts.CacheTimeout)
+// Starts the registry fetch and the cache lookup at the same time. A verified
+// hit cancels the registry request, otherwise the registry bytes are served
+// and written to the cache.
+func (handler *Handler) fetchCacheAndRegistryTogether(ctx context.Context, repo, blob string, chunk blobindex.Chunk) ([]byte, error) {
+	registryCtx, cancelRegistry := context.WithCancel(ctx)
+	defer cancelRegistry()
+
+	type registryAnswer struct {
+		data []byte
+		err  error
+	}
+	answer := make(chan registryAnswer, 1)
+	go func() {
+		data, err := handler.fetchFromRegistry(registryCtx, repo, blob, chunk)
+		answer <- registryAnswer{data: data, err: err}
+	}()
+
+	// A hit makes the registry request unnecessary
+	if data, ok := handler.tryCache(ctx, chunk.Digest); ok {
+		return data, nil
+	}
+
+	fromRegistry := <-answer
+	if fromRegistry.err != nil {
+		return nil, fromRegistry.err
+	}
+	if !handler.breaker.open() {
+		handler.pool.submit(chunk.Digest, fromRegistry.data)
+	}
+	return fromRegistry.data, nil
+}
+
+// Reads one chunk from the origin registry
+func (handler *Handler) fetchFromRegistry(ctx context.Context, repo, blob string, chunk blobindex.Chunk) ([]byte, error) {
+	body, err := handler.registry.GetBlobRange(ctx, repo, blob, chunk.Offset, chunk.Offset+chunk.Size-1)
+	if err != nil {
+		handler.opts.Metrics.recordRegistryFailure(err)
+		return nil, fmt.Errorf("error while attempting to fetch from registry %s: %w", chunk.Digest, err)
+	}
+	defer body.Close()
+
+	data, err := io.ReadAll(body)
+	if err != nil {
+		handler.opts.Metrics.recordRegistryFailure(err)
+		return nil, fmt.Errorf("error while reading from registry body %s: %w", chunk.Digest, err)
+	}
+	return data, nil
+}
+
+// Attempt to read a chunk from the cluster cache
+// Returns the chunk bytes and true on a hit, or (nil, false) on a miss or when the bytes fail their digest check
+func (handler *Handler) tryCache(ctx context.Context, digest string) ([]byte, bool) {
+	// Time every lookup, so the cost a miss adds in front of the registry fetch can be read off the node
+	startedAt := time.Now()
+	data, outcome := handler.lookupCache(ctx, digest)
+	handler.opts.Metrics.LookupSeconds.WithLabelValues(outcome).Observe(time.Since(startedAt).Seconds())
+
+	return data, outcome == "hit"
+}
+
+// Asks the cluster cache for one chunk and names the outcome: hit, miss, mismatch or error
+func (handler *Handler) lookupCache(ctx context.Context, digest string) ([]byte, string) {
+	// Own timeout so cache cant stall the read unnecessarily long
+	reqCtx, cancel := context.WithTimeout(ctx, handler.opts.CacheTimeout)
 	defer cancel()
 
-	rc, hit, err := h.cache.Get(cctx, digest)
+	readCloser, hit, err := handler.cache.Get(reqCtx, digest)
 	if err != nil {
-		h.breaker.recordFailure()
-		return nil, false
+		handler.breaker.recordFailure() // Record failure, so the breakerThreshold can be triggered at a certain amount
+		return nil, "error"
 	}
-	h.breaker.recordSuccess()
 
+	// Cache miss => shows that the cache is healthy
 	if !hit {
-		return nil, false
+		handler.breaker.recordSuccess()
+		return nil, "miss"
 	}
-	defer rc.Close()
+	defer readCloser.Close()
 
-	data, err := io.ReadAll(rc)
+	data, err := io.ReadAll(readCloser)
 	if err != nil {
-		return nil, false
+		handler.breaker.recordFailure()
+		return nil, "error"
 	}
-	return data, true
+
+	// The cache answered, so it counts as healthy even when the bytes turn out to be wrong
+	handler.breaker.recordSuccess()
+
+	// Any pod can write to the cache, so bytes that do not match their name are treated as a miss
+	if !nydus.MatchesChunkDigest(data, digest) {
+		handler.opts.Metrics.DigestMismatches.Inc()
+		return nil, "mismatch"
+	}
+	return data, "hit"
 }
 
-func (h *Handler) populate(digest string, data []byte) {
+// Upload a chunk to the cluster cache
+func (handler *Handler) populate(digest string, data []byte) {
+	// Dedicated context with 5s timeout for avoiding a worker being blocked by a slow upload
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = h.cache.Put(ctx, digest, bytes.NewReader(data))
+	_ = handler.cache.Put(ctx, digest, bytes.NewReader(data))
 }
 
-// parseRange parses an HTTP byte range of the form "bytes=start-end" with an
-// inclusive end.
+// Convert a range header field from a http request into (start,end)
+// E.g. Range: bytes=100-199 => returns (100, 199)
 func parseRange(header string) (uint64, uint64, error) {
 	if !strings.HasPrefix(header, "bytes=") {
-		return 0, 0, fmt.Errorf("missing or malformed Range header %q", header)
+		return 0, 0, fmt.Errorf("missing or malformed Range header in %q", header)
 	}
+
 	spec := strings.TrimPrefix(header, "bytes=")
 	dash := strings.IndexByte(spec, '-')
 	if dash < 0 {
@@ -332,26 +432,29 @@ func parseRange(header string) (uint64, uint64, error) {
 
 	start, err := strconv.ParseUint(strings.TrimSpace(spec[:dash]), 10, 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("bad range start %q: %w", spec, err)
+		return 0, 0, fmt.Errorf("invalid range start %q: %w", spec, err)
 	}
 
 	end, err := strconv.ParseUint(strings.TrimSpace(spec[dash+1:]), 10, 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("bad range end %q: %w", spec, err)
+		return 0, 0, fmt.Errorf("invalid range end %q: %w", spec, err)
 	}
 	return start, end, nil
 }
 
-func writePartial(w http.ResponseWriter, start, end uint64, parts [][]byte) {
-	var total int
-	for _, part := range parts {
-		total += len(part)
+// Creates a 206 response to a GET-range request with the requested bytes
+func writePartial(w http.ResponseWriter, start, end uint64, byteParts [][]byte) {
+	var totalBytes int
+	for _, currPart := range byteParts {
+		totalBytes += len(currPart)
 	}
+
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/*", start, end))
-	w.Header().Set("Content-Length", strconv.Itoa(total))
+	w.Header().Set("Content-Length", strconv.Itoa(totalBytes))
 	w.WriteHeader(http.StatusPartialContent)
-	for _, part := range parts {
-		_, _ = w.Write(part)
+
+	for _, currPart := range byteParts {
+		_, _ = w.Write(currPart)
 	}
 }

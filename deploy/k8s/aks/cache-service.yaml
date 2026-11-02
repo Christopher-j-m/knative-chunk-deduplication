@@ -1,6 +1,4 @@
-# AKS variant of deploy/k8s/cache-service. Differences: image comes from ACR
-# (__ACR__ rendered by sed at apply time) and the pinned ClusterIP moves to
-# the AKS service CIDR (10.0.0.0/16, pinned in deploy/terraform).
+# Cluster chunk cache (3gb of chunk data in-memory) deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,12 +6,8 @@ metadata:
   labels:
     app: nydus-cluster-cache
 spec:
+  # Make sure that there are no 2 pods at the same time => would split the metrics between these and pollute benchmark results 
   replicas: 1
-  # Recreate keeps the cache a single pod at all times: the rolling default
-  # briefly runs two pods on every benchmark reset, splitting chunk traffic
-  # and hit counters between two separate in-memory stores and quietly
-  # corrupting the measurement. The moment of downtime lands inside the
-  # reset window where nothing fetches
   strategy:
     type: Recreate
   selector:
@@ -37,12 +31,13 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: cache-service
-          image: __ACR__/nydus-cluster-cache:0.1.0
+          image: __ACR__/nydus-cluster-cache:0.2.0
           imagePullPolicy: IfNotPresent
           args:
             - "--listen=:8080"
             - "--store=memory"
             - "--capacity-bytes=3221225472"
+            - "--check-digests=true"
           env:
             - name: GOMEMLIMIT
               value: "4500MiB"

@@ -1,7 +1,7 @@
-rtt_ms,image,chunks,warm_floor_ms,registry_chunk_ms,cache_chunk_ms
-0,fn-python-hello,1257,1970.8,2.298,0.651
-0,fn-python-ml,1589,1967.4,2.712,0.834
-80,fn-python-hello,1257,2156.6,21.412,1.863
-80,fn-python-ml,1589,2405.8,23.544,1.586
-0,mean,,1969.1,2.505,0.742
-80,mean,,2281.2,22.478,1.724
+rtt_ms,image,chunks,warm_floor_ms,registry_chunk_ms,plain_chunk_ms,cache_chunk_ms
+0,fn-python-hello,1257,2206.4,2.066,1.174,0.65
+0,fn-python-ml,1589,2195.0,2.527,1.449,0.574
+80,fn-python-hello,1257,1814.6,20.534,7.349,2.254
+80,fn-python-ml,1589,2188.2,22.039,7.502,1.755
+0,mean,,2200.7,2.296,1.312,0.612
+80,mean,,2001.4,21.286,7.426,2.005

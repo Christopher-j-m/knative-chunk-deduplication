@@ -6,15 +6,15 @@ import (
 	"sort"
 )
 
-// AssignImages maps every app id in the trace to one image index. The
-// trace does not say which image an app runs, so this mapping is a modeling
-// choice; the study reports results across strategies and seeds to show the
-// conclusions do not hinge on it.
+// The ibm traces only contain a generic app name, so we dont know anything about it
+// This function maps every app id from the traces to one of our images by index
+// The assignment happens based on the strategy, e.g. by most called apps
 func AssignImages(trace *Trace, images []int32, strategy string, seed int64) ([]int32, error) {
 	if len(images) == 0 {
-		return nil, fmt.Errorf("no images to assign")
+		return nil, fmt.Errorf("there are no images to assign")
 	}
 
+	// Create an app list so we can reorder the apps without changing the apps themselves
 	apps := make([]int32, len(trace.Apps))
 	for i := range apps {
 		apps[i] = int32(i)
@@ -22,26 +22,34 @@ func AssignImages(trace *Trace, images []int32, strategy string, seed int64) ([]
 
 	assign := make([]int32, len(apps))
 	switch strategy {
+	// Sort app by most to less frequently called and sort app id accordingly (by name in case same frequency)
 	case "volume":
-		// most-invoked apps first, name tie-break keeps runs reproducible
 		sort.SliceStable(apps, func(i, j int) bool {
-			ci, cj := trace.Counts[apps[i]], trace.Counts[apps[j]]
-			if ci != cj {
-				return ci > cj
+			first, sec := trace.Counts[apps[i]], trace.Counts[apps[j]]
+			if first != sec {
+				return first > sec
 			}
 			return trace.Apps[apps[i]] < trace.Apps[apps[j]]
 		})
-		for rank, app := range apps {
-			assign[app] = images[rank%len(images)]
+
+		// Assigns a container image for each app in the sorted list
+		for rank, currApp := range apps {
+			assign[currApp] = images[rank%len(images)]
 		}
+
+	// Give each app a random image
 	case "hash":
-		sort.Slice(apps, func(i, j int) bool { return trace.Apps[apps[i]] < trace.Apps[apps[j]] })
+		sort.Slice(apps, func(i, j int) bool {
+			return trace.Apps[apps[i]] < trace.Apps[apps[j]]
+		})
+
+		// Random generator with fixed see for easier debugging (reproduceability)
 		rng := rand.New(rand.NewSource(seed))
-		for _, app := range apps {
-			assign[app] = images[rng.Intn(len(images))]
+		for _, currApp := range apps {
+			assign[currApp] = images[rng.Intn(len(images))]
 		}
 	default:
-		return nil, fmt.Errorf("unknown mapping strategy %q", strategy)
+		return nil, fmt.Errorf("unknown image assignment strategy %q", strategy)
 	}
 	return assign, nil
 }

@@ -1,0 +1,2 @@
+measured_at,image,compressed_bytes,fetch_seconds,bytes_per_second
+2026-11-01T18:37:21Z,fn-pytorch-cpu,267478092,14.013,19087854

@@ -11,10 +11,10 @@ set -euo pipefail
 # give registry traffic realistic latency, otherwise the local registry is
 # too fast for the configurations to differ.
 #
-# Usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile] [scale-target]
+# Usage: benchmark-scaleout.sh <1|2|2s|3|4> <repetitions> [outfile] [scale-target]
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG="${1:?usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile] [scale-target]}"
-REPS="${2:?usage: benchmark-scaleout.sh <1|2|3|4> <repetitions> [outfile] [scale-target]}"
+CONFIG="${1:?usage: benchmark-scaleout.sh <1|2|2s|3|4> <repetitions> [outfile] [scale-target]}"
+REPS="${2:?usage: benchmark-scaleout.sh <1|2|2s|3|4> <repetitions> [outfile] [scale-target]}"
 OUTFILE="${3:-${REPO_ROOT}/analysis/results/benchmarks/scaleout-config${CONFIG}-$(date +%Y%m%dT%H%M%S).csv}"
 # Three replicas put one cold pod on each remaining node, which is the published
 # protocol. Two replicas start exactly one cold pod, so a cold start can be
@@ -29,8 +29,8 @@ SERVICE="${SERVICE:-fn-python-hello}"
 READY_TIMEOUT="${READY_TIMEOUT:-420}"
 case "${CONFIG}" in
   1) WORKLOAD="${WORKLOAD:-${REPO_ROOT}/deploy/k8s/knative/workload-oci.yaml}" ;;
-  2|3|4) WORKLOAD="${WORKLOAD:-${REPO_ROOT}/deploy/k8s/knative/workload-nydus.yaml}" ;;
-  *) echo "unknown config ${CONFIG}; choose 1, 2, 3, or 4" >&2; exit 1 ;;
+  2|2s|3|4) WORKLOAD="${WORKLOAD:-${REPO_ROOT}/deploy/k8s/knative/workload-nydus.yaml}" ;;
+  *) echo "unknown config ${CONFIG}; choose 1, 2, 2s, 3, or 4" >&2; exit 1 ;;
 esac
 
 # The p2p disk caches survive a plain workload reset, so the reset script
@@ -77,6 +77,33 @@ if kubectl -n kube-system get ds nydus-node-setup >/dev/null 2>&1; then
         exit 1
       fi
     done
+  fi
+else
+  # On the local rig the template sits in each node container. Configuration
+  # 2s differs from 2 only in this file, and 3 differs from 2s only in the
+  # Dragonfly mirror, so a leftover would go unnoticed
+  case "${CONFIG}" in
+    2|4) wanted_backend='"type": "http-proxy"' ;;
+    2s|3) wanted_backend='"type": "registry"' ;;
+    *) wanted_backend="" ;;
+  esac
+  if [[ -n "${wanted_backend}" ]]; then
+    for node in $("${REPO_ROOT}/scripts/cluster-nodes.sh"); do
+      if ! docker exec "${node}" grep -q "${wanted_backend}" /etc/nydus/nydusd-config.json; then
+        echo "nydusd template on ${node} does not match config ${CONFIG}; run config-switch first" >&2
+        exit 1
+      fi
+      has_mirror="no"
+      docker exec "${node}" grep -q '127.0.0.1:4001' /etc/nydus/nydusd-config.json && has_mirror="yes"
+      if [[ "${CONFIG}" == "3" && "${has_mirror}" == "no" ]] || [[ "${CONFIG}" == "2s" && "${has_mirror}" == "yes" ]]; then
+        echo "nydusd template on ${node} has Dragonfly mirror=${has_mirror}, wrong for config ${CONFIG}" >&2
+        exit 1
+      fi
+    done
+  fi
+  if [[ "${CONFIG}" == "3" ]] && ! "${REPO_ROOT}/scripts/dragonfly-rig.sh" healthy; then
+    echo "a Dragonfly client is not answering; Dragonfly must be healthy for config 3" >&2
+    exit 1
   fi
 fi
 
@@ -163,12 +190,171 @@ wait_pods_ready() {
   done
 }
 
+# How often the kubelet restarted a pod's function container before it came
+# up, with the exit code and reason of the last crash, as "count,code,reason".
+# A pod that never crashed gives "0,,", a pod that is already gone ",,"
+container_restarts() {
+  local fields
+  fields="$(kubectl get pod "$1" -o jsonpath='{range .status.containerStatuses[?(@.name=="user-container")]}{.restartCount},{.lastState.terminated.exitCode},{.lastState.terminated.reason}{end}' 2>/dev/null || true)"
+  echo "${fields:-,,}"
+}
+
+# Keeps the seed pod's full status and its events, the kubelet's back-off and
+# kill notices among them, so every restart can be timed afterwards. The next
+# reset deletes the pod and its events with it
+capture_seed_pod_record() {
+  local rep="$1" pod="$2" directory
+  directory="${OUTFILE%.csv}.logs/rep${rep}"
+  mkdir -p "${directory}"
+  kubectl get pod "${pod}" -o yaml >"${directory}/seed-pod-status.yaml" 2>/dev/null || true
+  kubectl get events --field-selector "involvedObject.name=${pod}" \
+    -o custom-columns='FIRST:.firstTimestamp,LAST:.lastTimestamp,COUNT:.count,TYPE:.type,REASON:.reason,MESSAGE:.message' \
+    --sort-by=.lastTimestamp >"${directory}/seed-pod-events.txt" 2>/dev/null || true
+  kubectl get events --field-selector "involvedObject.name=${pod}" -o yaml \
+    >"${directory}/seed-pod-events.yaml" 2>/dev/null || true
+}
+
 node_of_pod() {
   kubectl get pod "$1" -o jsonpath='{.spec.nodeName}'
 }
 
+# Total bytes a node has received on every interface except loopback. On the
+# local rig a node is a docker container; on AKS the node-setup pod enters the
+# host's network namespace and reads eth0 alone, because accelerated
+# networking counts every packet twice, once on eth0 and once on the network
+# card behind it, and pod interfaces carry no pull traffic. An empty answer
+# means the counter is unavailable
+node_rx_total() {
+  local node="$1" raw setup_pod only=""
+  if docker inspect "${node}" >/dev/null 2>&1; then
+    raw="$(docker exec "${node}" cat /proc/net/dev 2>/dev/null || true)"
+  else
+    only="eth0"
+    setup_pod="$(kubectl -n kube-system get pods -l app=nydus-node-setup \
+      --field-selector "spec.nodeName=${node}" -o name 2>/dev/null | head -1)"
+    [[ -n "${setup_pod}" ]] || { echo ""; return; }
+    raw="$(kubectl -n kube-system exec "${setup_pod#pod/}" -- nsenter -t 1 -n -- \
+      cat /proc/net/dev 2>/dev/null || true)"
+  fi
+  awk -F'[: ]+' -v only="${only}" 'NR > 2 { name = ($1 == "") ? $2 : $1; value = ($1 == "") ? $3 : $2
+    if (name != "lo" && (only == "" || name == only)) { total += value; found = 1 } }
+    END { if (found) printf "%.0f", total }' <<<"${raw}"
+}
+
+# The wall-clock moment a phase began, so a per-second trace recorded next to
+# the cell, such as the host processor sampler, can be cut to that phase
+utc_stamp() {
+  date -u -d "@$1" +%FT%T.%3NZ
+}
+
+# Remembers every node's receive counter at the start of a phase, so the
+# bytes a pull really moved can be checked against what the image demands
+snapshot_rx() {
+  RX_BEFORE=()
+  local node
+  for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+    RX_BEFORE["${node}"]="$(node_rx_total "${node}")"
+  done
+}
+
+rx_delta() {
+  local node="$1" before after
+  before="${RX_BEFORE[${node}]:-}"
+  after="$(node_rx_total "${node}")"
+  if [[ -z "${before}" || -z "${after}" ]]; then
+    echo ""
+    return
+  fi
+  echo $((after - before))
+}
+declare -A RX_BEFORE
+
+# The local rig's nodes are docker containers, AKS nodes are not
+ON_LOCAL_RIG="no"
+first_node="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+if [[ -n "${first_node}" ]] && docker inspect "${first_node}" >/dev/null 2>&1; then
+  ON_LOCAL_RIG="yes"
+fi
+
+# Failed registry fetches a node's chunk proxy has counted so far, one
+# "reason<TAB>count" line per reason after a first line "answered" that shows
+# the proxy exports the counter at all; a proxy built before the counter
+# existed gives no answer rather than a false zero.
+# The proxy listens on the node's loopback address, so the reading is taken
+# from inside the node: through docker on the local rig, through the
+# node-setup pod's host namespace on AKS
+proxy_fetch_errors() {
+  local node="$1" raw setup_pod
+  if docker inspect "${node}" >/dev/null 2>&1; then
+    raw="$(docker exec "${node}" wget -qO- -T 5 http://127.0.0.1:18000/metrics 2>/dev/null || true)"
+  else
+    setup_pod="$(kubectl -n kube-system get pods -l app=nydus-node-setup \
+      --field-selector "spec.nodeName=${node}" -o name 2>/dev/null | head -1)"
+    [[ -n "${setup_pod}" ]] || return 0
+    raw="$(kubectl -n kube-system exec "${setup_pod#pod/}" -- nsenter -t 1 -m -n -- \
+      curl -s -m 5 http://127.0.0.1:18000/metrics 2>/dev/null || true)"
+  fi
+  grep -q '^# HELP registry_fetch_errors_total' <<<"${raw}" || return 0
+  echo "answered"
+  sed -n 's/^registry_fetch_errors_total{reason="\([^"]*\)"} \([0-9.e+]*\)$/\1\t\2/p' <<<"${raw}"
+}
+
+# Remembers every node's failed-fetch counters at the start of a phase
+snapshot_fetch_errors() {
+  FETCH_ERRORS_BEFORE=()
+  local node
+  for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+    FETCH_ERRORS_BEFORE["${node}"]="$(proxy_fetch_errors "${node}")"
+  done
+}
+
+# Prints "total,reasons" for the failed fetches a node's proxy counted since
+# the snapshot, the reasons as "reason=count" joined by "|". When the proxy
+# did not answer both times, as under eager pulling, both fields stay empty
+fetch_errors_delta() {
+  local node="$1" before after
+  before="${FETCH_ERRORS_BEFORE[${node}]:-}"
+  after="$(proxy_fetch_errors "${node}")"
+  if [[ "${before}" != answered* || "${after}" != answered* ]]; then
+    echo ","
+    return
+  fi
+  awk -F'\t' -v before="${before}" '
+    BEGIN {
+      count = split(before, lines, "\n")
+      for (i = 2; i <= count; i++) { split(lines[i], parts, "\t"); old[parts[1]] = parts[2] }
+    }
+    NR > 1 {
+      delta = $2 - old[$1]; total += delta
+      if (delta > 0) reasons = reasons (reasons == "" ? "" : "|") $1 "=" delta
+    }
+    END { printf "%d,%s", total, reasons }' <<<"${after}"
+}
+declare -A FETCH_ERRORS_BEFORE
+
+# Packets the emulated registry link has thrown away because its queue was
+# full, read from the shaping rule on the local rig. The count only grows, so
+# two readings around a phase give that phase's drops. On AKS the answer is
+# empty, even while the rig on the same host keeps its registry running
+netem_dropped_total() {
+  [[ "${ON_LOCAL_RIG}" == "yes" ]] || { echo ""; return; }
+  docker inspect registry.localhost >/dev/null 2>&1 || { echo ""; return; }
+  "${REPO_ROOT}/scripts/registry-netem.sh" status 2>/dev/null \
+    | grep -o 'dropped [0-9]*' | head -1 | awk '{ print $2 }'
+}
+
+netem_dropped_since() {
+  local before="$1" after
+  after="$(netem_dropped_total)"
+  if [[ -z "${before}" || -z "${after}" ]]; then
+    echo ""
+    return
+  fi
+  echo $((after - before))
+}
+
 mkdir -p "$(dirname "${OUTFILE}")"
-echo "config,rep,phase,node,warm,ready_seconds,pull_seconds,cache_hits_delta,cache_misses_delta" >"${OUTFILE}"
+echo "config,rep,phase,node,warm,ready_seconds,pull_seconds,cache_hits_delta,cache_misses_delta,node_rx_bytes,phase_started_at,netem_dropped,registry_fetch_errors,registry_fetch_error_reasons,restart_count,last_exit_code,last_exit_reason" >"${OUTFILE}"
 echo "Writing results to ${OUTFILE}"
 
 reset_probe_pod
@@ -182,15 +368,53 @@ ensure_probe_pod
 apply_with_min_scale 1
 kubectl wait ksvc/${SERVICE} --for=condition=Ready --timeout=300s >/dev/null
 
+# With CAPTURE_LOGS set, the chunk proxies' logs and every nydusd log of a
+# repetition are kept next to the CSV, together with that repetition's rows,
+# so failed registry fetches can be read per node and phase afterwards. The
+# next reset removes the nydusd logs from the nodes, so they are copied
+# before it. Only AKS has the node-setup pods that reach the node's files
+capture_repetition_logs() {
+  local rep="$1" since="$2" directory pod node setup_pod
+  directory="${OUTFILE%.csv}.logs/rep${rep}"
+  mkdir -p "${directory}"
+  awk -F, -v rep="${rep}" 'NR == 1 || $2 == rep' "${OUTFILE}" >"${directory}/config${CONFIG}-rep${rep}.csv"
+  for pod in $(kubectl -n kube-system get pods -l app=chunk-proxy -o name 2>/dev/null); do
+    node="$(kubectl -n kube-system get "${pod}" -o jsonpath='{.spec.nodeName}')"
+    kubectl -n kube-system logs "${pod#pod/}" --since-time="${since}" >"${directory}/proxy-${node}.log" 2>/dev/null || true
+  done
+  for setup_pod in $(kubectl -n kube-system get pods -l app=nydus-node-setup -o name 2>/dev/null); do
+    node="$(kubectl -n kube-system get "${setup_pod}" -o jsonpath='{.spec.nodeName}')"
+    kubectl -n kube-system exec "${setup_pod#pod/}" -- nsenter -t 1 -m -- sh -c \
+      'for log in /var/lib/containerd-nydus/logs/*/nydusd*.log; do [ -f "$log" ] && echo "== $log" && cat "$log"; done' \
+      >"${directory}/nydusd-${node}.log" 2>/dev/null || true
+  done
+}
+
 for rep in $(seq 1 "${REPS}"); do
   echo "=== config ${CONFIG} rep ${rep}/${REPS}"
+  rep_started_at="$(date -u +%FT%TZ)"
   "${RESET_SCRIPT}" >/dev/null
+
+  # A campaign can insist on proof that the reset left every node cold. One
+  # more reset is allowed before the cell gives up, because a purge racing a
+  # pod that is still terminating is the usual reason for a leftover
+  if [[ -n "${PRE_SEED_CHECK:-}" ]] && ! bash -c "${PRE_SEED_CHECK}"; then
+    echo "  check  nodes not cold after the reset, resetting once more" >&2
+    "${RESET_SCRIPT}" >/dev/null
+    if ! bash -c "${PRE_SEED_CHECK}"; then
+      echo "nodes are still not cold before rep ${rep}; refusing to measure" >&2
+      exit 1
+    fi
+  fi
   ensure_probe_pod
 
   # Seed phase: one pod cold-starts on a fresh cluster and, in the cached
   # configuration, leaves its chunks behind for the other nodes
   hits_before="$(cache_metric cache_hits_total)"
   misses_before="$(cache_metric cache_misses_total)"
+  snapshot_rx
+  snapshot_fetch_errors
+  dropped_before="$(netem_dropped_total)"
   start="$(date +%s.%N)"
   apply_with_min_scale 1
   seed_revision=""
@@ -203,8 +427,21 @@ for rep in $(seq 1 "${REPS}"); do
   seed_node="$(node_of_pod "${seed_pod}")"
   hits_delta="$(awk -v a="$(cache_metric cache_hits_total)" -v b="${hits_before}" 'BEGIN{print a-b}')"
   misses_delta="$(awk -v a="$(cache_metric cache_misses_total)" -v b="${misses_before}" 'BEGIN{print a-b}')"
-  echo "${CONFIG},${rep},seed,${seed_node},no,${seed_ready#* },$(pull_seconds "${seed_pod}"),${hits_delta},${misses_delta}" >>"${OUTFILE}"
-  echo "  seed   node=${seed_node} ready=${seed_ready#* }s hits+=${hits_delta} misses+=${misses_delta}"
+  seed_rx="$(rx_delta "${seed_node}")"
+  seed_dropped="$(netem_dropped_since "${dropped_before}")"
+  seed_restarts="$(container_restarts "${seed_pod}")"
+  echo "${CONFIG},${rep},seed,${seed_node},no,${seed_ready#* },$(pull_seconds "${seed_pod}"),${hits_delta},${misses_delta},${seed_rx},$(utc_stamp "${start}"),${seed_dropped},$(fetch_errors_delta "${seed_node}"),${seed_restarts}" >>"${OUTFILE}"
+  echo "  seed   node=${seed_node} ready=${seed_ready#* }s hits+=${hits_delta} misses+=${misses_delta} netem-dropped+=${seed_dropped} restarts=${seed_restarts%%,*}"
+
+  # A seed-only campaign measures the first cold start alone, with its logs,
+  # and leaves the scale-out out entirely
+  if [[ -n "${SEED_ONLY:-}" ]]; then
+    capture_seed_pod_record "${rep}" "${seed_pod}"
+    if [[ -n "${CAPTURE_LOGS:-}" ]]; then
+      capture_repetition_logs "${rep}" "${rep_started_at}"
+    fi
+    continue
+  fi
 
   # A hook between the two phases lets a campaign disturb the cache once the
   # seed has filled it and before the other nodes ask for it. That is the only
@@ -220,6 +457,9 @@ for rep in $(seq 1 "${REPS}"); do
   # warm because that node already holds the chunks locally
   hits_before="$(cache_metric cache_hits_total)"
   misses_before="$(cache_metric cache_misses_total)"
+  snapshot_rx
+  snapshot_fetch_errors
+  dropped_before="$(netem_dropped_total)"
   start="$(date +%s.%N)"
   apply_with_min_scale "${SCALE_TARGET}"
   scale_revision="$(revision_of_latest)"
@@ -230,14 +470,19 @@ for rep in $(seq 1 "${REPS}"); do
   scale_ready="$(wait_pods_ready "${scale_revision}" "${SCALE_TARGET}" "${start}")"
   hits_delta="$(awk -v a="$(cache_metric cache_hits_total)" -v b="${hits_before}" 'BEGIN{print a-b}')"
   misses_delta="$(awk -v a="$(cache_metric cache_misses_total)" -v b="${misses_before}" 'BEGIN{print a-b}')"
+  scale_dropped="$(netem_dropped_since "${dropped_before}")"
   while read -r pod ready; do
     node="$(node_of_pod "${pod}")"
     warm="no"
     [[ "${node}" == "${seed_node}" ]] && warm="yes"
-    echo "${CONFIG},${rep},scaleout,${node},${warm},${ready},$(pull_seconds "${pod}"),${hits_delta},${misses_delta}" >>"${OUTFILE}"
+    echo "${CONFIG},${rep},scaleout,${node},${warm},${ready},$(pull_seconds "${pod}"),${hits_delta},${misses_delta},$(rx_delta "${node}"),$(utc_stamp "${start}"),${scale_dropped},$(fetch_errors_delta "${node}"),$(container_restarts "${pod}")" >>"${OUTFILE}"
     echo "  scale  node=${node} warm=${warm} ready=${ready}s"
   done <<<"${scale_ready}"
-  echo "  scale  hits+=${hits_delta} misses+=${misses_delta}"
+  echo "  scale  hits+=${hits_delta} misses+=${misses_delta} netem-dropped+=${scale_dropped}"
+
+  if [[ -n "${CAPTURE_LOGS:-}" ]]; then
+    capture_repetition_logs "${rep}" "${rep_started_at}"
+  fi
 
   # Without proof that Dragonfly actually moved the bytes, config 3 is
   # indistinguishable from a plain registry rerun, so the download activity

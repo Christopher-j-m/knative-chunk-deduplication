@@ -1,4 +1,4 @@
-// Package cacheclient provides an HTTP client for storing and retrieving chunk data from a remote cache service.
+// Provides an HTTP client for storing and retrieving chunk data from a remote cache service (used by the chunk proxy on the cluster nodes)
 package cacheclient
 
 import (
@@ -9,35 +9,33 @@ import (
 	"strings"
 )
 
-// Client sends GET and PUT requests to a remote chunk cache service.
+// This client sends Get and Put requests to the remote cluster cache
 type Client struct {
-	base string
-	http *http.Client
+	baseUrl string
+	http    *http.Client
 }
 
-// New creates a Client that targets the given base URL.
-// A trailing slash in base is trimmed automatically.
-func New(base string) *Client {
-	return &Client{base: strings.TrimRight(base, "/"), http: &http.Client{}}
+func New(baseUrl string) *Client {
+	return &Client{baseUrl: strings.TrimRight(baseUrl, "/"), http: &http.Client{}}
 }
 
-func (c *Client) url(digest string) string {
-	return c.base + "/chunks/" + digest
+func (client *Client) url(digest string) string {
+	return client.baseUrl + "/chunks/" + digest
 }
 
-// Get fetches the chunk identified by digest from the cache.
-// A 200 response returns the body (caller must close it) with hit=true.
-// A 404 response is a clean miss: all return values are nil/false/nil.
-// Any transport error or unexpected status code is returned as a non-nil error.
-func (c *Client) Get(ctx context.Context, digest string) (io.ReadCloser, bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url(digest), nil)
+// Fetches the chunk with the given digest from the cache
+// Possible responses:
+// 200: cache hit => returns the body (we must close it at this client) with hit=true.
+// 404: cache miss
+func (client *Client) Get(ctx context.Context, digest string) (io.ReadCloser, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, client.url(digest), nil)
 	if err != nil {
-		return nil, false, fmt.Errorf("build get request: %w", err)
+		return nil, false, fmt.Errorf("error while building the get request: %w", err)
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := client.http.Do(req)
 	if err != nil {
-		return nil, false, fmt.Errorf("cache get %s: %w", digest, err)
+		return nil, false, fmt.Errorf("error while sending a cache get %s: %w", digest, err)
 	}
 
 	switch resp.StatusCode {
@@ -48,26 +46,26 @@ func (c *Client) Get(ctx context.Context, digest string) (io.ReadCloser, bool, e
 		return nil, false, nil
 	default:
 		resp.Body.Close()
-		return nil, false, fmt.Errorf("cache get %s: unexpected status %d", digest, resp.StatusCode)
+		return nil, false, fmt.Errorf("error received for cache get %s: status %d", digest, resp.StatusCode)
 	}
 }
 
-// Put uploads the content of body to the cache under the given digest.
-// The cache service must respond with 204 No Content; any other status is an error.
-func (c *Client) Put(ctx context.Context, digest string, body io.Reader) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.url(digest), body)
+// Send a new chunk to the cache (digest, payload)
+// Everything except 204 indicates that something went wrong
+func (client *Client) Put(ctx context.Context, digest string, body io.Reader) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, client.url(digest), body)
 	if err != nil {
-		return fmt.Errorf("build put request: %w", err)
+		return fmt.Errorf("error building put request: %w", err)
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := client.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("cache put %s: %w", digest, err)
+		return fmt.Errorf("error during cache put %s: %w", digest, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("cache put %s: unexpected status %d", digest, resp.StatusCode)
+		return fmt.Errorf("error received for cache put %s: status %d", digest, resp.StatusCode)
 	}
 
 	return nil

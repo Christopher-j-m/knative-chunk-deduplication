@@ -1,57 +1,55 @@
-// Package nydus provides types and tools for reading chunk metadata from Nydus image bootstraps
 package nydus
 
 import "fmt"
 
-// Represents a single data block within a Nydus image, identified by its content hash.
-// Both compressed and uncompressed sizes are tracked to support storage efficiency analysis.
+// Representation of single chunk of a container image
 type ChunkInfo struct {
-	Hash                      string `json:"hash"`
-	Size                      uint64 `json:"size"`
-	CompressedOffset          uint64 `json:"compressed_offset,omitempty"`
-	CompressedSize            uint64 `json:"compressed_size,omitempty"`
-	CompressedSizeGranularity string `json:"compressed_size_granularity,omitempty"` // "chunk" | "blob" | "unknown"
-	BlobDigest                string `json:"blob_digest,omitempty"`
-	BlobCompressedSize        uint64 `json:"blob_compressed_size,omitempty"`
-	Image                     string `json:"image"`
-	FileIndex                 int    `json:"file_index,omitempty"`
-	ChunkIndex                int    `json:"chunk_index"`
-	FilePath                  string `json:"file_path,omitempty"`
+	Hash             string `json:"hash"`                        // hash of this chunk
+	Size             uint64 `json:"size"`                        // size of this chunk in unpacked
+	CompressedOffset uint64 `json:"compressed_offset,omitempty"` // offset of this chunk in the respective compressed blob
+	CompressedSize   uint64 `json:"compressed_size,omitempty"`   // size of this chunk in the compressed blob
+	BlobDigest       string `json:"blob_digest,omitempty"`       // blob id that contains the chunk in our registry
+	Image            string `json:"image"`                       // container image name where this chunk belongs
+	FilePath         string `json:"file_path,omitempty"`         // filepath to the file where this chunk belongs
 }
 
-// Debugging helper to print a chunk in a human-readable format, showing its hash, size, and source image
+// Helper for local debugging puposes only
 func (c ChunkInfo) String() string {
-	return fmt.Sprintf("%s [%d bytes] from %s", c.Hash, c.Size, c.Image)
+	return fmt.Sprintf("Hash %s with %d bytes from Image %s", c.Hash, c.Size, c.Image)
 }
 
-// Holds all chunks belonging to a single container image, along with optional startup access data.
+// Representation of a container image and all its chunks
 type ImageChunks struct {
-	Image      string      `json:"image"`
-	TotalBytes uint64      `json:"total_bytes"`
-	Chunks     []ChunkInfo `json:"chunks"`
-	// AccessedChunks contains only chunks fetched during a cold container start
-	// nil means startup tracing has not run yet for this image
-	AccessedChunks []ChunkInfo `json:"accessed_chunks,omitempty"`
+	Image          string      `json:"image"`                     // container image name
+	TotalBytes     uint64      `json:"total_bytes"`               // size of all uncompressed chunks in the image
+	Chunks         []ChunkInfo `json:"chunks"`                    // chunks of this image
+	AccessedChunks []ChunkInfo `json:"accessed_chunks,omitempty"` // chunks that are accessed during cold start => only filled via scripts/run-startup-trace.sh
 }
 
-// Returns deduplicated chunks by hash, keeping the first occurrence of each.
-func (ic ImageChunks) UniqueChunks() []ChunkInfo {
+// Return a deduplicated list of chunks
+func (allImageChunks ImageChunks) UniqueChunks() []ChunkInfo {
 	seen := make(map[string]struct{})
-	var unique []ChunkInfo
-	for _, c := range ic.Chunks {
-		if _, ok := seen[c.Hash]; !ok {
-			seen[c.Hash] = struct{}{}
-			unique = append(unique, c)
+	var uniqueChunks []ChunkInfo
+
+	for _, currChunk := range allImageChunks.Chunks {
+
+		if _, ok := seen[currChunk.Hash]; !ok {
+			seen[currChunk.Hash] = struct{}{}
+			uniqueChunks = append(uniqueChunks, currChunk)
 		}
+
 	}
-	return unique
+
+	return uniqueChunks
 }
 
-// Returns the total uncompressed size of all chunks in the image.
-func (ic ImageChunks) TotalSize() uint64 {
-	var total uint64
-	for _, c := range ic.Chunks {
-		total += c.Size
+// Return the uncompressed size of all chunks in a given image chunk list
+func (allImageChunks ImageChunks) TotalSize() uint64 {
+	var totalSize uint64
+
+	for _, currChunk := range allImageChunks.Chunks {
+		totalSize += currChunk.Size
 	}
-	return total
+
+	return totalSize
 }

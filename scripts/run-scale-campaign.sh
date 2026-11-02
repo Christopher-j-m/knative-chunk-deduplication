@@ -2,7 +2,10 @@
 # Replays the full production week across cluster sizes, catalogs and
 # placements, then sweeps capacity and policy at two cluster sizes. Three
 # CSVs come out: one row per run, one row per run and frequency class, and
-# one row per run of response-time quantiles
+# one row per run of response-time quantiles. Runs without the cluster tier
+# are charged stock nydusd's per-chunk cost by default; BASELINE=ablation
+# charges them the proxy's own miss cost instead, which is the proxy with its
+# cache switched off
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,15 +19,24 @@ POLICIES="lru,lru2,size,refcount,gdsf"
 # which blocks of the campaign to run, so a long block can be resumed or
 # repeated on its own without redoing the ones that already landed
 BLOCKS="${BLOCKS:-A B C D}"
+BASELINE="${BASELINE:-stock}"
+case "${BASELINE}" in
+  stock|ablation) ;;
+  *) echo "BASELINE must be stock or ablation, not ${BASELINE}" >&2; exit 1 ;;
+esac
 
 # the trace loader alone peaks near 8 GB on the full week at this GC target,
 # so only one campaign process runs at a time
 export GOGC=50
 
 PART="$(mktemp)"; PART_CLASSES="$(mktemp)"; PART_LATENCY="$(mktemp)"
-trap 'rm -f "${PART}" "${PART_CLASSES}" "${PART_LATENCY}"' EXIT
+# each campaign builds its own binary, so two campaigns with different
+# baselines can run side by side without overwriting each other's build
+BUILD_DIR="$(mktemp -d)"
+SIM="${BUILD_DIR}/cache-sim"
+trap 'rm -rf "${PART}" "${PART_CLASSES}" "${PART_LATENCY}" "${BUILD_DIR}"' EXIT
 
-go build -o /tmp/cache-sim ./cmd/cache-sim
+go build -o "${SIM}" ./cmd/cache-sim
 mkdir -p "${OUT_DIR}"
 
 wanted_block() {
@@ -39,16 +51,19 @@ catalog_path() {
   esac
 }
 
-# per-chunk costs at one round trip, read from the fitted table
+# per-chunk costs at one round trip, read from the fitted table. A cached
+# run pays the proxy's miss cost for every chunk the cache lacks, while a run
+# without the cluster tier pays what the chosen baseline pays per chunk
 cost_args() {
-  "${PYTHON}" - "$1" "${COSTS}" <<'EOF'
+  "${PYTHON}" - "$1" "$2" "${COSTS}" <<'EOF'
 import sys, pandas as pd
-rtt, path = int(sys.argv[1]), sys.argv[2]
+rtt, side, path = int(sys.argv[1]), sys.argv[2], sys.argv[3]
 matches = pd.read_csv(path).query("image == 'mean' and rtt_ms == @rtt")
 if matches.empty:
     sys.exit(f"no mean cost row for rtt_ms={rtt} in {path}")
 row = matches.iloc[0]
-print(f"-warm-floor-ms {int(row.warm_floor_ms)} -registry-chunk-ms {row.registry_chunk_ms} -cache-chunk-ms {row.cache_chunk_ms}")
+registry = row.stock_chunk_ms if side == "stock" else row.registry_chunk_ms
+print(f"-warm-floor-ms {int(row.warm_floor_ms)} -registry-chunk-ms {registry} -cache-chunk-ms {row.cache_chunk_ms}")
 EOF
 }
 
@@ -88,10 +103,16 @@ run() {
   # captured as its own statement so a failed lookup (bad rtt, missing row)
   # aborts under set -e instead of silently expanding to nothing and letting
   # cache-sim fall back to its built-in default coefficients
-  local costs
-  costs="$(cost_args "${rtt}")" || { echo "cost lookup failed for rtt=${rtt}" >&2; exit 1; }
+  # only a run without the cluster tier stands for the baseline
+  local side="cached"
+  if [[ " $* " == *" -no-cluster-cache "* && "${BASELINE}" == "stock" ]]; then
+    side="stock"
+  fi
 
-  /tmp/cache-sim -trace "${TRACE}" -working-sets "$(catalog_path "${catalog}")" \
+  local costs
+  costs="$(cost_args "${rtt}" "${side}")" || { echo "cost lookup failed for rtt=${rtt}" >&2; exit 1; }
+
+  "${SIM}" -trace "${TRACE}" -working-sets "$(catalog_path "${catalog}")" \
     -nodes "${nodes}" -placement "${placement}" -capacities "${caps}" \
     -policies "${policies}" -seeds "${seeds}" -map "${map}" \
     ${costs} -latency-out "${PART_LATENCY}" -classes-out "${PART_CLASSES}" \
