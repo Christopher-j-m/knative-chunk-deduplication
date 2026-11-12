@@ -1,0 +1,11 @@
+pair,rep,phase,service,node,ready_seconds,pull_seconds,cache_hits_delta,cache_misses_delta
+fn-python-hello+fn-go-hello,1,seed,fn-python-hello,k3d-nydus-cache-agent-0,27.724,0.848,0,1257
+fn-python-hello+fn-go-hello,1,cross,fn-go-hello,k3d-nydus-cache-server-0,5.259,0.595,1,41
+fn-python-hello+fn-go-hello,2,seed,fn-python-hello,k3d-nydus-cache-server-0,27.956,0.887,0,1257
+fn-python-hello+fn-go-hello,2,cross,fn-go-hello,k3d-nydus-cache-agent-0,4.108,0.593,1,41
+fn-python-hello+fn-go-hello,3,seed,fn-python-hello,k3d-nydus-cache-agent-0,28.042,0.849,0,1257
+fn-python-hello+fn-go-hello,3,cross,fn-go-hello,k3d-nydus-cache-server-0,4.550,0.590,1,41
+fn-python-hello+fn-go-hello,4,seed,fn-python-hello,k3d-nydus-cache-server-0,28.852,0.850,0,1257
+fn-python-hello+fn-go-hello,4,cross,fn-go-hello,k3d-nydus-cache-agent-0,4.384,0.592,1,41
+fn-python-hello+fn-go-hello,5,seed,fn-python-hello,k3d-nydus-cache-agent-0,27.955,0.889,0,1257
+fn-python-hello+fn-go-hello,5,cross,fn-go-hello,k3d-nydus-cache-server-0,4.902,0.591,1,41

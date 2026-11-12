@@ -124,7 +124,7 @@ def fig_response_tail(latency, node_counts=(3, 100, 10000), placement="random"):
             style, width = styles[flag]
             ax.plot(depth, [row.iloc[0][c] for c in columns], linestyle=style, linewidth=width,
                     marker="o", markersize=3.5, color=node_colors[nodes],
-                    label=f"{nodes:,} nodes, {'with cluster cache' if flag == 'yes' else 'stock Nydus'}")
+                    label=f"{nodes:,} nodes, {'with cluster cache' if flag == 'yes' else 'plain Nydus'}")
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xticks(depth)

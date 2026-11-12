@@ -1,0 +1,59 @@
+
+## live-hour-config2s-20261112T095228 (configuration 2s)
+requests 11379, failed 0, pods 75
+
+| app | image | predicted cold starts | live cold starts | miss |
+|---|---|---|---|---|
+| a0697 | fn-go-hello | 1 | 1 | +0 |
+| a0677 | fn-python-hello | 3 | 1 | -2 |
+| a0725 | fn-java-springboot | 2 | 2 | +0 |
+| a0676 | fn-node-api | 3 | 3 | +0 |
+| a0507 | fn-python-ml | 1 | 1 | +0 |
+| a0581 | fn-pytorch-cpu | 4 | 2 | -2 |
+| a0587 | fn-go-hello | 10 | 3 | -7 |
+| a0500 | fn-python-hello | 3 | 2 | -1 |
+| a0372 | fn-java-springboot | 5 | 5 | +0 |
+| a0307 | fn-node-api | 6 | 6 | +0 |
+| a0345 | fn-python-ml | 5 | 3 | -2 |
+| a0265 | fn-pytorch-cpu | 3 | 2 | -1 |
+| a0170 | fn-go-hello | 12 | 7 | -5 |
+| a0145 | fn-python-hello | 3 | 9 | +6 |
+| a0180 | fn-java-springboot | 12 | 7 | -5 |
+| a0181 | fn-node-api | 12 | 7 | -5 |
+| a0023 | fn-python-ml | 1 | 1 | +0 |
+| a0078 | fn-pytorch-cpu | 19 | 11 | -8 |
+| a0009 | fn-go-hello | 1 | 1 | +0 |
+| a0036 | fn-python-hello | 1 | 1 | +0 |
+| total | | 107 | 75 | -32 |
+
+registry blob GETs 2209, registry bytes 1751.4 MB
+cache hits 0, misses 0, inserted bytes 0.0 MB, stored after 0.0 MB
+
+response time p50 4 ms, p95 15 ms, p99 13116 ms, p99.9 28504 ms, max 30763 ms
+cold start seed: n 6, mean 16,065 ms, median 15,604 ms
+cold start first on node: n 15, mean 10,927 ms, median 9,605 ms
+cold start repeat on node: n 54, mean 2,547 ms, median 1,971 ms
+predicted seed over the same images: mean 13,181 ms
+predicted first on node over the same images: mean 10,843 ms
+predicted repeat on node over the same images: mean 2,001 ms
+
+| image | kind | predicted (ms) | live mean (ms) | live n |
+|---|---|---|---|---|
+| fn-go-hello | seed | 2,313 | 4,319 | 1 |
+| fn-go-hello | first on node | 2,313 | 3,321 | 5 |
+| fn-go-hello | repeat on node | 2,001 | 1,527 | 6 |
+| fn-python-hello | seed | 11,335 | 10,713 | 1 |
+| fn-python-hello | first on node | 11,335 | 6,953 | 3 |
+| fn-python-hello | repeat on node | 2,001 | 1,183 | 9 |
+| fn-java-springboot | seed | 3,523 | 21,345 | 1 |
+| fn-java-springboot | first on node | 3,523 | 16,790 | 2 |
+| fn-java-springboot | repeat on node | 2,001 | 2,987 | 11 |
+| fn-node-api | seed | 16,281 | 16,253 | 1 |
+| fn-node-api | first on node | 16,281 | 13,798 | 2 |
+| fn-node-api | repeat on node | 2,001 | 1,296 | 13 |
+| fn-python-ml | seed | 13,801 | 14,956 | 1 |
+| fn-python-ml | first on node | 13,801 | 8,200 | 1 |
+| fn-python-ml | repeat on node | 2,001 | 1,828 | 3 |
+| fn-pytorch-cpu | seed | 31,831 | 28,806 | 1 |
+| fn-pytorch-cpu | first on node | 31,831 | 28,531 | 2 |
+| fn-pytorch-cpu | repeat on node | 2,001 | 5,214 | 12 |

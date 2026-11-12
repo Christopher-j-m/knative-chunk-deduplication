@@ -1,0 +1,13 @@
+model,image,touched_chunks,cached_first_ms,uncached_first_ms,repeat_ms
+proxy,fn-go-hello,42,2353,3225,2281
+proxy,fn-python-hello,1257,4448,30536,2281
+proxy,fn-java-springboot,205,2634,6889,2281
+proxy,fn-node-api,1923,5596,45506,2281
+proxy,fn-python-ml,1589,5020,37999,2281
+proxy,fn-pytorch-cpu,4017,9206,92575,2281
+plain,fn-go-hello,42,,2313,2001
+plain,fn-python-hello,1257,,11335,2001
+plain,fn-java-springboot,205,,3523,2001
+plain,fn-node-api,1923,,16281,2001
+plain,fn-python-ml,1589,,13801,2001
+plain,fn-pytorch-cpu,4017,,31831,2001

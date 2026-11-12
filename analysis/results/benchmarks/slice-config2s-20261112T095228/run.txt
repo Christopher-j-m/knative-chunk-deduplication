@@ -1,0 +1,2 @@
+config=2s rtt=80ms rate=600mbit started=2026-11-12T09:54:42Z
+finished=2026-11-12T10:55:21Z

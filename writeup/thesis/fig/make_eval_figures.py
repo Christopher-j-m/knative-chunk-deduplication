@@ -52,7 +52,7 @@ CONFIG_LABELS = {
     2: "Config 2 (Nydus)",
     3: "Config 3 (Nydus + Dragonfly)",
     4: "Config 4 (Nydus + cluster cache)",
-    "2s": "Config 2s (stock nydusd)",
+    "2s": "Config 2s (plain nydusd)",
 }
 
 IMAGES = [
@@ -148,7 +148,7 @@ def cold_by_config():
 
 
 # The distance sweep measured every configuration in one session with the
-# one-second probe, and stock Nydus at its defaults in the session after it
+# one-second probe, and plain Nydus at its defaults in the session after it
 DISTANCE_PREFIX = "distance-clean"
 DEFAULTS_PREFIX = "distance-defaults100k"
 DISTANCE_RTTS = [0, 10, 25, 50, 80, 100]
@@ -175,15 +175,15 @@ def distance_series(image):
     """Collects one line per configuration of the distance sweep for one image.
 
     Each line holds the median cold start per round trip and the range of the
-    cold pods as its band. Stock Nydus at its defaults (zstd conversion with
+    cold pods as its band. Plain Nydus at its defaults (zstd conversion with
     prefetch on) comes from its own session and is drawn dashed.
     """
     sources = [
         (CONFIG_LABELS[1], CONFIG_COLORS[1], "-", "o", "{prefix}-config1-{image}-rtt{rtt}ms-rate600mbit-*.csv"),
         (CONFIG_LABELS[2], CONFIG_COLORS[2], "-", "o", "{prefix}-config2-{image}-rtt{rtt}ms-rate600mbit-*.csv"),
-        ("Config 2s (stock nydusd, prefetch off)", CONFIG_COLORS["2s"], "-", "o",
+        ("Config 2s (plain nydusd, prefetch off)", CONFIG_COLORS["2s"], "-", "o",
          "{prefix}-config2s-{image}-rtt{rtt}ms-rate600mbit-*.csv"),
-        ("Stock Nydus defaults (zstd, prefetch on)", CONFIG_COLORS["2s"], "--", "^",
+        ("Plain Nydus defaults (zstd, prefetch on)", CONFIG_COLORS["2s"], "--", "^",
          DEFAULTS_PREFIX + "-config2s-{image}-nydus-zstd-prefetchall-rtt{rtt}ms-rate600mbit-*.csv"),
         (CONFIG_LABELS[4], CONFIG_COLORS[4], "-", "o", "{prefix}-config4-{image}-rtt{rtt}ms-rate600mbit-*.csv"),
     ]
@@ -223,6 +223,7 @@ def distance_sweep():
         ax.set_yscale("log")
         ax.set_yticks([2, 3, 5, 10, 20, 50])
         ax.get_yaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+        ax.get_yaxis().set_minor_formatter(matplotlib.ticker.NullFormatter())
         ax.set_title(title, fontsize=9)
         ax.set_xlabel("Emulated registry RTT (ms)")
         ax.set_xticks(DISTANCE_RTTS)
@@ -441,58 +442,15 @@ def floor_decomposition():
     plt.close(fig)
 
 
-def cache_ceiling():
-    """Throughput and tail latency of the cache pod against concurrency.
-
-    The point is a knee: throughput stops rising while the tail keeps
-    climbing. Two panels rather than two y-axes on one, because a dual-axis
-    plot invites the reader to compare two scales that do not share units.
-    """
-    path = os.path.join(SUMMARIES, "cache-saturation-summary.csv")
-    if not os.path.exists(path):
-        return
-    data = pd.read_csv(path)
-
-    sizes = sorted(data["chunk_size_bytes"].unique())
-    shades = {sizes[0]: "#0072b2", sizes[-1]: "#009e73"}
-
-    fig, axes = plt.subplots(1, 2, figsize=(6.6, 2.7))
-    for size in sizes:
-        series = data[data["chunk_size_bytes"] == size].sort_values("concurrency")
-        label = f"{size // 1024} KiB chunks"
-        axes[0].plot(series["concurrency"], series["requests_per_second"] / 1000,
-                     marker="o", markersize=4.5, linewidth=2,
-                     color=shades[size], label=label)
-        axes[1].plot(series["concurrency"], series["p99_ms"],
-                     marker="o", markersize=4.5, linewidth=2,
-                     color=shades[size], label=label)
-
-    for ax in axes:
-        ax.set_xscale("log", base=2)
-        ax.set_xlabel("Simultaneous requesters")
-        ax.set_xticks(sorted(data["concurrency"].unique()))
-        ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
-        ax.tick_params(axis="x", labelsize=7)
-
-    axes[0].set_ylabel("Throughput (thousand chunk reads/s)")
-    axes[1].set_ylabel("99th percentile (ms)")
-    axes[1].set_yscale("log")
-    axes[1].get_yaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
-
-    axes[0].legend(fontsize=7, loc="lower right")
-    fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "eval_cache_ceiling.pdf"), bbox_inches="tight")
-    plt.close(fig)
-
-
 # bandwidth_sweep is deliberately absent: the thesis no longer includes that
-# figure, and calling it here would only leave an unused file behind
+# figure, and calling it here would only leave an unused file behind. The
+# cache-ceiling figure was removed for the same reason; its numbers are in
+# the text and in summaries/cache-saturation-summary.csv
 def main():
     cold_by_config()
     distance_sweep()
     envelope()
     floor_decomposition()
-    cache_ceiling()
     print("figures written to", OUT)
 
 
