@@ -1,0 +1,16 @@
+repetition,node,received_bytes,waited_seconds,outcome,seed_phase_bytes
+1,k3d-nydus-cache-server-0,16530,3.3,quiet,54025672
+1,k3d-nydus-cache-agent-0,6435,3.3,quiet,
+1,k3d-nydus-cache-agent-1,54015,3.3,quiet,
+2,k3d-nydus-cache-server-0,7373,3.3,quiet,
+2,k3d-nydus-cache-agent-0,9062,3.3,quiet,54620435
+2,k3d-nydus-cache-agent-1,55665,3.3,quiet,
+3,k3d-nydus-cache-server-0,16205,3.3,quiet,55773373
+3,k3d-nydus-cache-agent-0,30771,3.3,quiet,
+3,k3d-nydus-cache-agent-1,92756,3.3,quiet,
+4,k3d-nydus-cache-server-0,5623,3.3,quiet,
+4,k3d-nydus-cache-agent-0,14462,3.3,quiet,54961480
+4,k3d-nydus-cache-agent-1,62155,3.3,quiet,
+5,k3d-nydus-cache-server-0,12076,3.3,quiet,53478964
+5,k3d-nydus-cache-agent-0,7648,3.3,quiet,
+5,k3d-nydus-cache-agent-1,74742,3.3,quiet,

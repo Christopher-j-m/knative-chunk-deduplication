@@ -1,0 +1,55 @@
+# Converts the six corpus images into the compressed Nydus conversion that a
+# stock deployment uses, inside the cluster instead of on the operator's host.
+# nydusify v2.3.2 runs with its default compressor (zstd) from each image's
+# eager tag and writes the tag nydus-zstd beside the existing ones. The push
+# credentials come from the secret acr-push, a docker config.json for __ACR__.
+# Render with: sed "s|__ACR__|<name>.azurecr.io|g" convert-zstd-job.yaml | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: convert-zstd
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: nydusify
+          image: __ACR__/nydusify-tool:v2.3.2
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -u
+              nydusify --version
+              cd /work
+              for image in fn-go-hello fn-python-hello fn-java-springboot fn-node-api fn-python-ml fn-pytorch-cpu; do
+                echo "### convert ${image}"
+                nydusify convert --source "__ACR__/${image}:oci" --target "__ACR__/${image}:nydus-zstd" \
+                  || { echo "### convert FAILED ${image}"; exit 1; }
+                echo "### check ${image}"
+                nydusify check --source "__ACR__/${image}:oci" --target "__ACR__/${image}:nydus-zstd" || true
+                rm -rf /work/*
+              done
+              echo "### all conversions done"
+          env:
+            - name: DOCKER_CONFIG
+              value: /docker
+          volumeMounts:
+            - name: docker-config
+              mountPath: /docker
+              readOnly: true
+            - name: work
+              mountPath: /work
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: acr-push
+            items:
+              - key: .dockerconfigjson
+                path: config.json
+        - name: work
+          emptyDir: {}

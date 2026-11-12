@@ -1,0 +1,5 @@
+config,nodes,image,rtt_ms,rate,reset_end,seed_end,scaleout_end
+2s,3,fn-go-hello,80,600mbit,2026-11-11T00:37:35Z,2026-11-11T00:37:46Z,2026-11-11T00:37:50Z
+2s,3,fn-java-springboot,80,600mbit,2026-11-11T00:38:37Z,2026-11-11T00:38:50Z,2026-11-11T00:39:03Z
+2s,3,fn-node-api,80,600mbit,2026-11-11T00:39:50Z,2026-11-11T00:40:02Z,2026-11-11T00:40:12Z
+2s,3,fn-python-ml,80,600mbit,2026-11-11T00:40:58Z,2026-11-11T00:41:08Z,2026-11-11T00:41:19Z

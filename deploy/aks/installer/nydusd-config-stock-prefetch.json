@@ -1,0 +1,30 @@
+{
+  "device": {
+    "backend": {
+      "type": "registry",
+      "config": {
+        "scheme": "https",
+        "timeout": 10,
+        "connect_timeout": 10,
+        "retry_limit": 2
+      }
+    },
+    "cache": {
+      "type": "blobcache",
+      "config": {
+        "work_dir": "/var/lib/containerd-nydus/cache"
+      }
+    }
+  },
+  "mode": "direct",
+  "digest_validate": false,
+  "iostats_files": false,
+  "enable_xattr": true,
+  "amplify_io": 1048576,
+  "fs_prefetch": {
+    "enable": true,
+    "threads_count": 8,
+    "merging_size": 1048576,
+    "prefetch_all": true
+  }
+}

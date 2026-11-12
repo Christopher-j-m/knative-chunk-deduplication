@@ -61,7 +61,7 @@ fi
 if kubectl -n kube-system get ds nydus-node-setup >/dev/null 2>&1; then
   case "${CONFIG}" in
     2|4) wanted_backend='"type": "http-proxy"' ;;
-    3) wanted_backend='"type": "registry"' ;;
+    2s|3) wanted_backend='"type": "registry"' ;;
     *) wanted_backend="" ;;
   esac
   if [[ -n "${wanted_backend}" ]]; then
@@ -69,6 +69,14 @@ if kubectl -n kube-system get ds nydus-node-setup >/dev/null 2>&1; then
       if ! kubectl -n kube-system exec "${setup_pod#pod/}" -- nsenter -t 1 -m -p -- \
           grep -q "${wanted_backend}" /etc/nydus/nydusd-config.json; then
         echo "nydusd template on ${setup_pod} does not match config ${CONFIG}; run config-switch first" >&2
+        exit 1
+      fi
+      # Configuration 2s differs from 3 only in the Dragonfly mirror
+      has_mirror="no"
+      kubectl -n kube-system exec "${setup_pod#pod/}" -- nsenter -t 1 -m -p -- \
+        grep -q '127.0.0.1:4001' /etc/nydus/nydusd-config.json && has_mirror="yes"
+      if [[ "${CONFIG}" == "3" && "${has_mirror}" == "no" ]] || [[ "${CONFIG}" == "2s" && "${has_mirror}" == "yes" ]]; then
+        echo "nydusd template on ${setup_pod} has Dragonfly mirror=${has_mirror}, wrong for config ${CONFIG}" >&2
         exit 1
       fi
       if [[ "${CONFIG}" == "3" ]] && ! kubectl -n kube-system exec "${setup_pod#pod/}" -- \
@@ -387,6 +395,20 @@ capture_repetition_logs() {
     kubectl -n kube-system exec "${setup_pod#pod/}" -- nsenter -t 1 -m -- sh -c \
       'for log in /var/lib/containerd-nydus/logs/*/nydusd*.log; do [ -f "$log" ] && echo "== $log" && cat "$log"; done' \
       >"${directory}/nydusd-${node}.log" 2>/dev/null || true
+
+    # nydusd logs no single request, so its own backend counters (reads,
+    # failed reads, bytes, latency) and the addresses it holds open are kept
+    # too: they show which registry served a stock nydusd and how often
+    kubectl -n kube-system exec "${setup_pod#pod/}" -- nsenter -t 1 -m -n -- sh -c \
+      'for socket in /var/lib/containerd-nydus/socket/*/api.sock; do
+         [ -S "$socket" ] || continue
+         echo "== $socket"
+         curl -s -m 5 --unix-socket "$socket" http://localhost/api/v1/metrics/backend
+         echo
+       done
+       echo "== established connections of nydusd"
+       ss -tnp state established 2>/dev/null | grep nydusd || true' \
+      >"${directory}/nydusd-backend-${node}.txt" 2>/dev/null || true
   done
 }
 
@@ -444,12 +466,16 @@ for rep in $(seq 1 "${REPS}"); do
   fi
 
   # A hook between the two phases lets a campaign disturb the cache once the
-  # seed has filled it and before the other nodes ask for it. That is the only
-  # moment at which the degradation experiments can take the cache away from a
-  # cold start that is about to depend on it
+  # seed has filled it and before the other nodes ask for it, or wait until the
+  # seed's background download is over. That is the only moment at which the
+  # degradation experiments can take the cache away from a cold start that is
+  # about to depend on it. The hook finds the repetition in REPETITION, the
+  # seed's node in SEED_NODE and that node's receive counter from the start of
+  # the seed phase in SEED_RX_BEFORE
   if [[ -n "${PRE_SCALEOUT_HOOK:-}" ]]; then
     echo "  hook   ${PRE_SCALEOUT_HOOK}"
-    bash -c "${PRE_SCALEOUT_HOOK}" || echo "  hook   returned non-zero, continuing" >&2
+    REPETITION="${rep}" SEED_NODE="${seed_node}" SEED_RX_BEFORE="${RX_BEFORE[${seed_node}]:-}" \
+      bash -c "${PRE_SCALEOUT_HOOK}" || echo "  hook   returned non-zero, continuing" >&2
   fi
 
   # Scale-out phase: two more replicas land on the remaining nodes and
@@ -479,6 +505,13 @@ for rep in $(seq 1 "${REPS}"); do
     echo "  scale  node=${node} warm=${warm} ready=${ready}s"
   done <<<"${scale_ready}"
   echo "  scale  hits+=${hits_delta} misses+=${misses_delta} netem-dropped+=${scale_dropped}"
+
+  # A disturbance the earlier hook set up is undone here, once the cold
+  # starts it was meant for are measured
+  if [[ -n "${POST_SCALEOUT_HOOK:-}" ]]; then
+    echo "  hook   ${POST_SCALEOUT_HOOK}"
+    REPETITION="${rep}" bash -c "${POST_SCALEOUT_HOOK}" || echo "  hook   returned non-zero, continuing" >&2
+  fi
 
   if [[ -n "${CAPTURE_LOGS:-}" ]]; then
     capture_repetition_logs "${rep}" "${rep_started_at}"

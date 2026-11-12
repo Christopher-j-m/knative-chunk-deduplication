@@ -1,0 +1,66 @@
+{
+ "schemaVersion": 2,
+ "mediaType": "application/vnd.oci.image.manifest.v1+json",
+ "config": {
+  "mediaType": "application/vnd.oci.image.config.v1+json",
+  "digest": "sha256:ce18448941d443881cc5610cc3eebc770534aa8d19c7643326dc3bb1fcdc3f4b",
+  "size": 4808
+ },
+ "layers": [
+  {
+   "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+   "digest": "sha256:382eaa48845f3c780115bf59be4b8fcc215bb6445e8d9439efa1af2e3df0f5b2",
+   "size": 9887,
+   "annotations": {
+    "containerd.io/snapshot/nydus-blob": "true"
+   }
+  },
+  {
+   "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+   "digest": "sha256:ba57937ae7a15c5dfd01f49014e11b07ab0f6d93474e12bd66749a363af80e64",
+   "size": 18510955,
+   "annotations": {
+    "containerd.io/snapshot/nydus-blob": "true"
+   }
+  },
+  {
+   "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+   "digest": "sha256:f1754da66936eff4d4f66c346873b779d5f4fb1eb293991b4db7229bd0dd8629",
+   "size": 3897184,
+   "annotations": {
+    "containerd.io/snapshot/nydus-blob": "true"
+   }
+  },
+  {
+   "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+   "digest": "sha256:d2c1e1a35b3ccee4a702b8336577e5652f02beea8807a67426daf2dd2a4c9ea7",
+   "size": 9608832,
+   "annotations": {
+    "containerd.io/snapshot/nydus-blob": "true"
+   }
+  },
+  {
+   "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+   "digest": "sha256:29885f7034275e7b1bc74aab02a2ab4699b3860bfc8865de48733e4d08955a50",
+   "size": 56148905,
+   "annotations": {
+    "containerd.io/snapshot/nydus-blob": "true"
+   }
+  },
+  {
+   "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+   "digest": "sha256:14910bb6fd40acabfcf625fc04c76bfb9e3213164e164770f2c2b1ec927f8b7e",
+   "size": 111566,
+   "annotations": {
+    "containerd.io/snapshot/nydus-bootstrap": "true",
+    "containerd.io/snapshot/nydus-fs-version": "6"
+   }
+  }
+ ],
+ "annotations": {
+  "containerd.io/snapshot/nydus-builder-version": "v2.3.2",
+  "containerd.io/snapshot/nydus-fs-version": "6",
+  "containerd.io/snapshot/nydus-source-digest": "sha256:5af8c89ea0618138440eefc2b306994e97b6845ca0a8cad4c7a93cff449016fb",
+  "containerd.io/snapshot/nydus-source-reference": "<registry>.azurecr.io/fn-java-springboot:oci"
+ }
+}

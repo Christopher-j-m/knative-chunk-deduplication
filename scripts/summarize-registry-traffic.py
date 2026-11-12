@@ -11,7 +11,7 @@ phase are both measured rather than estimated.
 import argparse
 import csv
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 TIMESTAMP = re.compile(r'time="([^"]+)"')
@@ -68,6 +68,13 @@ def main():
         default="analysis/results/summaries/registry-traffic-summary.csv",
         help="Where to write the per-phase totals",
     )
+    parser.add_argument(
+        "--end-slack-seconds",
+        type=float,
+        default=0.0,
+        help="Extends each scale-out window by this much; the driver stamps the end of a phase "
+        "in whole seconds, so 1 covers the responses that complete in the cut-off fraction",
+    )
     args = parser.parse_args()
 
     requests = read_requests(Path(args.log))
@@ -81,6 +88,9 @@ def main():
             reset_end = parse_time(window["reset_end"])
             seed_end = parse_time(window["seed_end"])
             scaleout_end = parse_time(window["scaleout_end"])
+
+            # a response that completes just after the stamped end still belongs to the scale-out
+            scaleout_end += timedelta(seconds=args.end_slack_seconds)
 
             seed_fetches, seed_bytes = count_between(requests, image, reset_end, seed_end)
             scale_fetches, scale_bytes = count_between(requests, image, seed_end, scaleout_end)

@@ -1,14 +1,26 @@
 #!/usr/bin/env bash
 # Change the configuration of the aks cluster
-# 1 = oci images without nydus or cluster cache
-# 2 = nydus without cluster cache
-# 3 = dragonfly
-# 4 = nydus with cluster cache
+# 1  = oci images without nydus or cluster cache
+# 2  = nydus without cluster cache, every read still goes through the chunk proxy
+# 2s = stock nydusd without cluster cache, nydusd reads the registry itself and no proxy is involved
+# 3  = dragonfly
+# 4  = nydus with cluster cache
+# Under 2s, PREFETCH=all makes nydusd fetch the whole image ahead of the first read
+# and NYDUS_TAG picks the image conversion (nydus-none unless set)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG="${1:?usage: ACR=<acr> config-switch-aks.sh <1|2|3|4>}"
+CONFIG="${1:?usage: ACR=<acr> [PREFETCH=off|all] [NYDUS_TAG=nydus-none] config-switch-aks.sh <1|2|2s|3|4>}"
 ACR="${ACR:?set ACR to the ACR login server}"
+PREFETCH="${PREFETCH:-off}"
+NYDUS_TAG="${NYDUS_TAG:-nydus-none}"
+
+# Only stock nydusd can prefetch or read compressed chunks here, the chunk
+# proxy path is built for the uncompressed conversion alone
+if [[ "${CONFIG}" != "2s" && ( "${PREFETCH}" != "off" || "${NYDUS_TAG}" != "nydus-none" ) ]]; then
+  echo "PREFETCH=${PREFETCH} NYDUS_TAG=${NYDUS_TAG} only apply to config 2s" >&2
+  exit 1
+fi
 
 # run a shell cmd on every node
 nodeexec_all() {
@@ -59,11 +71,19 @@ remove_workload() {
 
 # Copy the nydusd config (which contains where to download chunks from) to every node
 # c2 & c4 = points to chunk proxy on the same node
+# c2s = stock nydusd reading the registry named in the image reference, with or without prefetch
 # c3 = points to dragonfly client on the same node (which in turn fetches from other nodes via p2p or falls back to registry)
 set_nydusd_backend() {
   local variant="$1" rendered encoded pod verdict
   if [[ "${variant}" == "dragonfly" ]]; then
     rendered="$(sed "s|__REGISTRY__|https://${ACR}|" "${REPO_ROOT}/deploy/aks/installer/nydusd-config-dragonfly.json")"
+  elif [[ "${variant}" == "stock" && "${PREFETCH}" == "all" ]]; then
+    rendered="$(cat "${REPO_ROOT}/deploy/aks/installer/nydusd-config-stock-prefetch.json")"
+  elif [[ "${variant}" == "stock" && "${PREFETCH}" == "off" ]]; then
+    rendered="$(cat "${REPO_ROOT}/deploy/aks/installer/nydusd-config-stock.json")"
+  elif [[ "${variant}" == "stock" ]]; then
+    echo "unknown prefetch mode ${PREFETCH}; choose off or all" >&2
+    exit 1
   else
     rendered="$(cat "${REPO_ROOT}/deploy/aks/installer/nydusd-config.json")"
   fi
@@ -104,6 +124,22 @@ set_nydusd_backend() {
   done
 }
 
+# Fail the switch when a node does not carry the backend and prefetch mode the
+# config asked for. Stock nydusd and Dragonfly share the registry type and
+# differ only in the mirror, so the mirror count is part of what is checked
+assert_backend() {
+  local backend="$1" mirrors="$2" prefetch="$3" pod verdict
+  for pod in $(kubectl -n kube-system get pods -l app=nydus-node-setup -o name); do
+    if ! verdict="$(kubectl -n kube-system exec "${pod#pod/}" -- nsenter -t 1 -m -p -- \
+        cat /etc/nydus/nydusd-config.json \
+        | python3 "${REPO_ROOT}/scripts/check-nydusd-config.py" "${backend}" "${mirrors}" "${prefetch}")"; then
+      echo "${pod#pod/}: ${verdict}" >&2
+      exit 1
+    fi
+  done
+  echo "nydusd on every node: ${verdict}"
+}
+
 apply_workload() {
   local tag="$1" manifest
   manifest="$(mktemp)"
@@ -135,7 +171,17 @@ case "${CONFIG}" in
     set_cache_enabled "false"
     remove_workload
     set_nydusd_backend http-proxy
+    assert_backend http-proxy 0 off
     apply_workload "nydus-none"
+    ;;
+  2s)
+    echo "Config 2s: stock nydusd reading the registry itself, prefetch ${PREFETCH}, tag ${NYDUS_TAG}"
+    set_snapshotter nydus
+    set_cache_enabled "false"
+    remove_workload
+    set_nydusd_backend stock
+    assert_backend registry 0 "${PREFETCH}"
+    apply_workload "${NYDUS_TAG}"
     ;;
   4)
     echo "Config 4: nydus + cluster cache"
@@ -143,6 +189,7 @@ case "${CONFIG}" in
     set_cache_enabled "true"
     remove_workload
     set_nydusd_backend http-proxy
+    assert_backend http-proxy 0 off
     apply_workload "nydus-none"
     ;;
   3)
@@ -152,6 +199,7 @@ case "${CONFIG}" in
     set_cache_enabled "false"
     remove_workload
     set_nydusd_backend dragonfly
+    assert_backend registry 1 off
     apply_workload "nydus-none"
     ;;
   *)

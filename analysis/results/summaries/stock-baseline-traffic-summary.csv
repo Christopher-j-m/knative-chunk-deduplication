@@ -1,0 +1,4 @@
+config,nodes,image,rtt_ms,seed_fetches,seed_bytes,scaleout_fetches,scaleout_bytes,total_fetches,total_bytes,fetch_saving,predicted
+2s,3,fn-python-hello,80,77,45990790,154,91981580,231,137972370,,
+2s,3,fn-python-ml,80,108,76048070,216,152096140,324,228144210,,
+2s,3,fn-pytorch-cpu,80,276,224336775,552,448673550,828,673010325,,

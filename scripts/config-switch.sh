@@ -37,9 +37,18 @@ remove_global_dropin() {
 
 # Restart every cluster node so the new containerd config file (e.g. with nydus settings) is read
 cycle_nodes() {
+  local balancer="${SERVER%-server-0}-serverlb"
   for node in "${AGENTS[@]}" "${SERVER}"; do
     docker restart "${node}"
   done
+
+  # A restarted node can come back on another address, while the load balancer
+  # in front of the control plane keeps the address it looked up at its own
+  # start and then refuses every kubectl call, so it is restarted as well
+  if docker inspect "${balancer}" >/dev/null 2>&1; then
+    docker restart "${balancer}"
+  fi
+
   for _ in $(seq 1 60); do
     kubectl get nodes >/dev/null 2>&1 && break
     sleep 5
@@ -68,9 +77,10 @@ apply_workload() {
 }
 
 # Copy nydusd onto every node with the given storage backend. Every nydus config
-# installs explicitly, otherwise switching back from 2s would keep the stock backend
+# installs explicitly, otherwise switching back from 2s would keep the stock backend.
+# The prefetch mode comes from PREFETCH and stays off unless a campaign asks for it
 install_backend() {
-  BACKEND="$1" "${REPO_ROOT}/scripts/node-snapshotter.sh" install
+  PREFETCH="${PREFETCH:-off}" BACKEND="$1" "${REPO_ROOT}/scripts/node-snapshotter.sh" install
 }
 
 # Fail the switch when a node does not carry the backend the config asked for.

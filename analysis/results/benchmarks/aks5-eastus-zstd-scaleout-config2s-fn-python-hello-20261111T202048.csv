@@ -1,0 +1,13 @@
+config,rep,phase,node,warm,ready_seconds,pull_seconds,cache_hits_delta,cache_misses_delta,node_rx_bytes,phase_started_at,netem_dropped,registry_fetch_errors,registry_fetch_error_reasons,restart_count,last_exit_code,last_exit_reason
+2s,1,seed,aks-node-00000m,no,15.556,2.244,0,0,30408654,2026-11-11T20:22:50.325Z,,0,,0,,
+2s,1,scaleout,aks-node-00000m,yes,3.134,0,0,0,3815733,2026-11-11T20:23:21.136Z,,0,,0,,
+2s,1,scaleout,aks-node-00000l,no,16.374,2.337,0,0,27706491,2026-11-11T20:23:21.136Z,,0,,0,,
+2s,1,scaleout,aks-node-00000n,no,16.854,2.288,0,0,33530218,2026-11-11T20:23:21.136Z,,0,,0,,
+2s,2,seed,aks-node-00000m,no,15.445,2.268,0,0,31366005,2026-11-11T20:24:40.854Z,,0,,0,,
+2s,2,scaleout,aks-node-00000m,yes,3.151,0,0,0,4631038,2026-11-11T20:25:12.411Z,,0,,0,,
+2s,2,scaleout,aks-node-00000l,no,16.245,2.185,0,0,27625127,2026-11-11T20:25:12.411Z,,0,,0,,
+2s,2,scaleout,aks-node-00000n,no,16.685,2.252,0,0,32394502,2026-11-11T20:25:12.411Z,,0,,0,,
+2s,3,seed,aks-node-00000m,no,17.168,2.411,0,0,31489636,2026-11-11T20:26:32.502Z,,0,,0,,
+2s,3,scaleout,aks-node-00000m,yes,3.157,0,0,0,5759625,2026-11-11T20:27:04.682Z,,0,,0,,
+2s,3,scaleout,aks-node-00000n,no,15.927,2.139,0,0,33394121,2026-11-11T20:27:04.682Z,,0,,0,,
+2s,3,scaleout,aks-node-00000l,no,16.373,2.214,0,0,27646234,2026-11-11T20:27:04.682Z,,0,,0,,

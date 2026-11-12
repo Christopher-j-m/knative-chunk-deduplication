@@ -45,9 +45,17 @@ def markdown_rows(text, first_header):
     raise SystemExit(f"no table starting with {first_header!r} in {REPORT}")
 
 
-def load_predictions():
+def as_milliseconds(cell):
+    """Reads a latency cell of the report, where a dash marks a start the configuration cannot make."""
+    cleaned = cell.replace(",", "")
+    if not cleaned.strip("-"):
+        return None
+    return int(cleaned)
+
+
+def load_predictions(heading="## 2. Live slice replay"):
     """Reads the per-app cold starts and per-image latencies registered before the rig run."""
-    section = REPORT.read_text().split("## 2. Live slice replay", 1)[1].split("\n## 3.", 1)[0]
+    section = REPORT.read_text().split(heading, 1)[1].split("\n## ", 1)[0]
     _, app_rows = markdown_rows(section, "app")
     cold_starts = {row[0]: int(row[4]) for row in app_rows}
 
@@ -55,9 +63,9 @@ def load_predictions():
     latencies = {}
     for row in image_rows:
         latencies[row[0]] = {
-            "cached_first_ms": int(row[2].replace(",", "")),
-            "uncached_first_ms": int(row[3].replace(",", "")),
-            "repeat_ms": int(row[4].replace(",", "")),
+            "cached_first_ms": as_milliseconds(row[2]),
+            "uncached_first_ms": as_milliseconds(row[3]),
+            "repeat_ms": as_milliseconds(row[4]),
         }
     return cold_starts, latencies
 
@@ -154,7 +162,7 @@ def quantile(values, fraction):
 def summarize_run(run_dir, predicted_cold, predicted_latency):
     """Prints the comparison for one configuration and returns its headline numbers."""
     run_text = (run_dir / "run.txt").read_text()
-    config = re.search(r"config=(\d)", run_text).group(1)
+    config = re.search(r"config=(\w+)", run_text).group(1)
     apps = json.loads((run_dir / "apps.json").read_text())["apps"]
     images = {app: meta["image"] for app, meta in apps.items()}
 
@@ -198,6 +206,16 @@ def summarize_run(run_dir, predicted_cold, predicted_latency):
             print(f"cold start {kind}: n {len(values)}, mean {statistics.mean(values):,.0f} ms, "
                   f"median {statistics.median(values):,.0f} ms")
 
+    # The prediction for a kind of start is averaged over the same images the
+    # live starts of that kind used, so the two means compare like with like
+    first_key = "cached_first_ms" if config == "4" else "uncached_first_ms"
+    kind_keys = {"seed": "uncached_first_ms", "first on node": first_key, "repeat on node": "repeat_ms"}
+    for kind, key in kind_keys.items():
+        predicted = [predicted_latency[s["image"]][key] for s in samples
+                     if s["kind"] == kind and s["image"] in predicted_latency]
+        if predicted and None not in predicted:
+            print(f"predicted {kind} over the same images: mean {statistics.mean(predicted):,.0f} ms")
+
     print("\n| image | kind | predicted (ms) | live mean (ms) | live n |")
     print("|---|---|---|---|---|")
     first_key = "cached_first_ms" if config == "4" else "uncached_first_ms"
@@ -206,16 +224,19 @@ def summarize_run(run_dir, predicted_cold, predicted_latency):
         for key, kind in kinds:
             values = [s["latency_ms"] for s in samples if s["image"] == image and s["kind"] == kind]
             mean = f"{statistics.mean(values):,.0f}" if values else "-"
-            print(f"| {image} | {kind} | {predicted[key]:,} | {mean} | {len(values)} |")
+            expected = "-" if predicted[key] is None else f"{predicted[key]:,}"
+            print(f"| {image} | {kind} | {expected} | {mean} | {len(values)} |")
     return {"config": config, "pods": len(pods), "registry_bytes": registry_bytes, "hits": hits, "misses": misses}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("runs", nargs="+", type=Path, help="slice-config<N>-<timestamp> result directories")
+    parser.add_argument("--section", default="## 2. Live slice replay",
+                        help="heading of the report section that holds the predictions to compare against")
     args = parser.parse_args()
 
-    predicted_cold, predicted_latency = load_predictions()
+    predicted_cold, predicted_latency = load_predictions(args.section)
     for run_dir in args.runs:
         summarize_run(run_dir, predicted_cold, predicted_latency)
 

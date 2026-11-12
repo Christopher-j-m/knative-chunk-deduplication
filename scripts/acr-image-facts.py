@@ -9,11 +9,15 @@ same way the cluster nodes pull.
 Layers the cluster's own service images already hold are left out of the
 digest lists and subtracted from the bytes a pull has to move.
 
+FACT_TAGS, a comma-separated list, names the tags to describe; it defaults to
+the eager and the uncompressed lazy conversion.
+
 Usage: python3 acr-image-facts.py [--infrastructure=[<registry>/]<image:tag>,...] <acr-login-server> <image> [<image> ...] > facts.json
 """
 
 import hashlib
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -24,7 +28,7 @@ MANIFEST_TYPES = ",".join([
     "application/vnd.docker.distribution.manifest.v2+json",
     "application/vnd.docker.distribution.manifest.list.v2+json",
 ])
-TAGS = ("oci", "nydus-none")
+TAGS = tuple(tag for tag in os.environ.get("FACT_TAGS", "oci,nydus-none").split(",") if tag)
 
 
 # ACR's anonymous pull still answers a bare request with a bearer challenge,

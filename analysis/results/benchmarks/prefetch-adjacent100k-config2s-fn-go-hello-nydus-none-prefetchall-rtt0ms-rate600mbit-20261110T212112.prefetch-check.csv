@@ -1,0 +1,6 @@
+repetition,seed_node,received_bytes,blob_bytes,fraction,observed
+1,k3d-nydus-cache-server-0,17331421,16771896,1.033,yes
+2,k3d-nydus-cache-agent-0,18776497,16771896,1.120,yes
+3,k3d-nydus-cache-server-0,17297911,16771896,1.031,yes
+4,k3d-nydus-cache-agent-0,19029236,16771896,1.135,yes
+5,k3d-nydus-cache-server-0,17262536,16771896,1.029,yes

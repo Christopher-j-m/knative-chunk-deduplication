@@ -255,9 +255,11 @@ force_stop_corpus_pods() {
   if ! sandboxes="$(corpus_sandboxes_on "${node}")"; then
     return 0
   fi
+  # crictl gives up after two seconds by default, and stopping a large image's
+  # containers can take longer, which left its sandbox behind on the node
   for pod_id in ${sandboxes}; do
-    docker exec "${node}" crictl stopp "${pod_id}" >/dev/null 2>&1 || true
-    docker exec "${node}" crictl rmp "${pod_id}" >/dev/null 2>&1 || true
+    docker exec "${node}" crictl --timeout 60s stopp "${pod_id}" >/dev/null 2>&1 || true
+    docker exec "${node}" crictl --timeout 60s rmp "${pod_id}" >/dev/null 2>&1 || true
   done
 }
 

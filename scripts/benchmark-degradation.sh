@@ -13,6 +13,9 @@ set -euo pipefail
 #                breaker opens and every chunk goes to the registry
 #   killed       the cache is deleted a few seconds into the scale-out, so the
 #                cold starts lose it midway through depending on it
+#   slowN        the cache stays reachable and full but answers N milliseconds
+#                late, so a lookup either beats the proxy's deadline late or
+#                misses it and goes to the registry after all
 #
 # The reference for all three is configuration 2, the uncached system. A mode
 # that lands at or below it has kept the promise; a mode that lands above it
@@ -46,12 +49,16 @@ restore_cache() {
 
 cleanup() {
   rm -rf "${SCRATCH}"
+  "${REPO_ROOT}/scripts/cache-netem.sh" off >/dev/null 2>&1 || true
   restore_cache
   "${REPO_ROOT}/scripts/registry-netem.sh" off >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 mkdir -p "${OUTDIR}"
+
+# shellcheck source=slow-cache-lib.sh
+source "${REPO_ROOT}/scripts/slow-cache-lib.sh"
 
 "${REPO_ROOT}/scripts/config-switch.sh" 4
 "${REPO_ROOT}/scripts/registry-netem.sh" on "${RTT}ms" "${RATE}"
@@ -61,6 +68,7 @@ ACR="${REGISTRY}" SERVICE="${IMAGE}" TAG="nydus-none" PORT="${PORT}" \
   "${REPO_ROOT}/scripts/render-workload.sh" >"${workload}"
 
 for mode in ${MODES}; do
+  post_hook=""
   case "${mode}" in
     empty)
       # deleting the pod loses the in-memory store; the replacement comes back
@@ -76,6 +84,18 @@ for mode in ${MODES}; do
       # backgrounded so the scale-out starts with the cache still present and
       # loses it partway through
       hook="( sleep ${KILL_DELAY}; kubectl scale deploy ${CACHE_DEPLOYMENT} --replicas=0 >/dev/null 2>&1 ) &"
+      ;;
+    slow*)
+      # The delay is set once the seed has filled the cache, checked from the
+      # probe pod, and taken away again after the scale-out. The next reset
+      # restarts the cache pod as well, which would also clear it
+      if ! delay_ms="$(slow_mode_delay_ms "${mode}")"; then
+        echo "degradation: unknown mode ${mode}" >&2
+        exit 1
+      fi
+      hook="SLOW_DELAY_MS=${delay_ms} SLOW_RECORD=${OUTDIR}/${PREFIX}-${mode}-${IMAGE}-rtt${RTT}ms-rate${RATE}.delay.csv \
+            ${REPO_ROOT}/scripts/slow-cache-hook.sh"
+      post_hook="${REPO_ROOT}/scripts/cache-netem.sh off"
       ;;
     *)
       echo "degradation: unknown mode ${mode}" >&2
@@ -94,12 +114,13 @@ for mode in ${MODES}; do
   restore_cache
 
   csv="${OUTDIR}/${PREFIX}-${mode}-${IMAGE}-rtt${RTT}ms-rate${RATE}-$(date +%Y%m%dT%H%M%S).csv"
-  if ! SERVICE="${IMAGE}" WORKLOAD="${workload}" PRE_SCALEOUT_HOOK="${hook}" \
+  if ! SERVICE="${IMAGE}" WORKLOAD="${workload}" PRE_SCALEOUT_HOOK="${hook}" POST_SCALEOUT_HOOK="${post_hook}" \
       "${REPO_ROOT}/scripts/benchmark-scaleout.sh" 4 "${REPS}" "${csv}" "${NODES}"; then
     echo "### degradation: FAILED mode ${mode}"
     [[ -f "${csv}" ]] && mv "${csv}" "${csv%.csv}.failed-partial"
   fi
 
+  "${REPO_ROOT}/scripts/cache-netem.sh" off >/dev/null 2>&1 || true
   restore_cache
 done
 

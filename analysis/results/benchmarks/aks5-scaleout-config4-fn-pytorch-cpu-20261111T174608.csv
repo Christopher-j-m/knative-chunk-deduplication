@@ -1,0 +1,21 @@
+config,rep,phase,node,warm,ready_seconds,pull_seconds,cache_hits_delta,cache_misses_delta,node_rx_bytes,phase_started_at,netem_dropped,registry_fetch_errors,registry_fetch_error_reasons,restart_count,last_exit_code,last_exit_reason
+4,1,seed,aks-node-00000m,no,61.624,0.481,1155,4552,321176810,2026-11-11T17:49:20.582Z,,294,connection refused=294,3,1,Error
+4,1,scaleout,aks-node-00000m,yes,3.962,0,8429,7,5497720,2026-11-11T17:50:31.005Z,,0,,0,,
+4,1,scaleout,aks-node-00000l,no,8.385,0.472,8429,7,8060415,2026-11-11T17:50:31.005Z,,0,,0,,
+4,1,scaleout,aks-node-00000n,no,8.822,0.434,8429,7,232688385,2026-11-11T17:50:31.005Z,,0,,0,,
+4,2,seed,aks-node-00000l,no,25.006,0.514,0,4218,292915397,2026-11-11T17:51:45.244Z,,0,,0,,
+4,2,scaleout,aks-node-00000l,yes,4.064,0,8436,0,6182527,2026-11-11T17:52:19.526Z,,0,,0,,
+4,2,scaleout,aks-node-00000n,no,8.870,0.432,8436,0,232739358,2026-11-11T17:52:19.526Z,,0,,0,,
+4,2,scaleout,aks-node-00000m,no,9.761,0.455,8436,0,231447764,2026-11-11T17:52:19.526Z,,0,,0,,
+4,3,seed,aks-node-00000m,no,41.202,0.535,2220,4788,330092223,2026-11-11T17:53:33.819Z,,531,connection refused=531,2,1,Error
+4,3,scaleout,aks-node-00000m,yes,3.186,0,8432,4,5549980,2026-11-11T17:54:23.856Z,,0,,0,,
+4,3,scaleout,aks-node-00000l,no,6.137,0.433,8432,4,7970548,2026-11-11T17:54:23.856Z,,0,,0,,
+4,3,scaleout,aks-node-00000n,no,8.779,0.467,8432,4,233111420,2026-11-11T17:54:23.856Z,,0,,0,,
+4,4,seed,aks-node-00000m,no,63.392,0.530,1021,4624,321184617,2026-11-11T17:55:38.998Z,,348,connection refused=348,3,1,Error
+4,4,scaleout,aks-node-00000m,yes,3.685,0,8432,4,4131647,2026-11-11T17:56:51.958Z,,0,,0,,
+4,4,scaleout,aks-node-00000n,no,7.291,0.532,8432,4,234298093,2026-11-11T17:56:51.958Z,,0,,0,,
+4,4,scaleout,aks-node-00000l,no,8.169,0.549,8432,4,8117525,2026-11-11T17:56:51.958Z,,0,,0,,
+4,5,seed,aks-node-00000m,no,38.062,0.455,2151,4827,326287876,2026-11-11T17:58:05.950Z,,568,connection refused=568,2,1,Error
+4,5,scaleout,aks-node-00000m,yes,3.783,0,8431,5,4788361,2026-11-11T17:58:54.113Z,,0,,0,,
+4,5,scaleout,aks-node-00000l,no,6.540,0.485,8431,5,8064259,2026-11-11T17:58:54.113Z,,0,,0,,
+4,5,scaleout,aks-node-00000n,no,8.809,0.460,8431,5,232944213,2026-11-11T17:58:54.113Z,,0,,0,,

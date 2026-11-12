@@ -1,0 +1,7 @@
+config,nodes,image,rtt_ms,seed_fetches,seed_bytes,scaleout_fetches,scaleout_bytes,total_fetches,total_bytes,fetch_saving,predicted
+2s,3,fn-python-hello,80,50,26937361,100,53874722,150,80812083,,
+2s,3,fn-pytorch-cpu,80,161,97806005,322,197357402,483,295163407,,
+2s,3,fn-go-hello,80,10,4323284,20,8646568,30,12969852,,
+2s,3,fn-java-springboot,80,80,52507926,160,105015852,240,157523778,,
+2s,3,fn-node-api,80,72,40845115,144,81690230,216,122535345,,
+2s,3,fn-python-ml,80,72,42474212,146,85628132,218,128102344,,

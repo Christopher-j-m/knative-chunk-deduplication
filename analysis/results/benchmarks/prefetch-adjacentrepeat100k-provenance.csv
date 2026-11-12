@@ -1,0 +1,3 @@
+timestamp,rtt_ms,rate,measured_connect_seconds
+2026-11-11T07:55:35Z,0,600mbit,0.000147
+2026-11-11T13:15:37Z,0,600mbit,0.000158

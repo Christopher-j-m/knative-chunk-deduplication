@@ -7,9 +7,11 @@ uv run --with matplotlib,pandas make_eval_figures.py
 
 import glob
 import os
+import re
 import sys
 
 import matplotlib
+import matplotlib.ticker
 from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -145,11 +147,20 @@ def cold_by_config():
     plt.close(fig)
 
 
-def load_sweep_cell(config, image, rtt, rate="600mbit"):
-    pattern = os.path.join(
-        BENCH, f"netem-sweep-config{config}-{image}-rtt{rtt}ms-rate{rate}-*.csv"
-    )
-    files = sorted(glob.glob(pattern))
+# The distance sweep measured every configuration in one session with the
+# one-second probe, and stock Nydus at its defaults in the session after it
+DISTANCE_PREFIX = "distance-clean"
+DEFAULTS_PREFIX = "distance-defaults100k"
+DISTANCE_RTTS = [0, 10, 25, 50, 80, 100]
+
+# Only the measurement itself ends in its bare timestamp; drain records,
+# prefetch verdicts and set-aside cells carry a further suffix
+MEASUREMENT_FILE = re.compile(r"-\d{8}T\d{6}\.csv$")
+
+
+def newest_measurement(pattern):
+    files = sorted(path for path in glob.glob(os.path.join(BENCH, pattern))
+                   if MEASUREMENT_FILE.search(path))
     if not files:
         return None
     return pd.read_csv(files[-1])
@@ -160,42 +171,65 @@ def sweep_stats(frame, warm):
     return values.median(), values.min(), values.max()
 
 
+def distance_series(image):
+    """Collects one line per configuration of the distance sweep for one image.
+
+    Each line holds the median cold start per round trip and the range of the
+    cold pods as its band. Stock Nydus at its defaults (zstd conversion with
+    prefetch on) comes from its own session and is drawn dashed.
+    """
+    sources = [
+        (CONFIG_LABELS[1], CONFIG_COLORS[1], "-", "o", "{prefix}-config1-{image}-rtt{rtt}ms-rate600mbit-*.csv"),
+        (CONFIG_LABELS[2], CONFIG_COLORS[2], "-", "o", "{prefix}-config2-{image}-rtt{rtt}ms-rate600mbit-*.csv"),
+        ("Config 2s (stock nydusd, prefetch off)", CONFIG_COLORS["2s"], "-", "o",
+         "{prefix}-config2s-{image}-rtt{rtt}ms-rate600mbit-*.csv"),
+        ("Stock Nydus defaults (zstd, prefetch on)", CONFIG_COLORS["2s"], "--", "^",
+         DEFAULTS_PREFIX + "-config2s-{image}-nydus-zstd-prefetchall-rtt{rtt}ms-rate600mbit-*.csv"),
+        (CONFIG_LABELS[4], CONFIG_COLORS[4], "-", "o", "{prefix}-config4-{image}-rtt{rtt}ms-rate600mbit-*.csv"),
+    ]
+    series = []
+    for label, color, style, marker, pattern in sources:
+        xs, medians, lows, highs = [], [], [], []
+        for rtt in DISTANCE_RTTS:
+            frame = newest_measurement(pattern.format(prefix=DISTANCE_PREFIX, image=image, rtt=rtt))
+            if frame is None:
+                continue
+            median, low, high = sweep_stats(frame, "no")
+            xs.append(rtt)
+            medians.append(median)
+            lows.append(low)
+            highs.append(high)
+        if xs:
+            series.append((label, color, style, marker, xs, medians, lows, highs))
+    return series
+
+
 def distance_sweep():
-    rtts = [0, 10, 25, 50, 80, 100]
+    """Draw the cold start of every configuration over registry distance.
+
+    Configuration 2 climbs to about 45 s while the others stay below 18 s, so
+    the time axis is logarithmic, which keeps the lower lines apart.
+    """
     panels = [("fn-python-hello", "python-hello (197 MB)"),
               ("fn-python-ml", "python-ml (546 MB)")]
 
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.0))
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.3), sharey=True)
     for ax, (image, title) in zip(axes, panels):
-        for config in (2, 4):
-            xs, medians, lows, highs, warms = [], [], [], [], []
-            for rtt in rtts:
-                frame = load_sweep_cell(config, image, rtt)
-                if frame is None:
-                    continue
-                median, low, high = sweep_stats(frame, "no")
-                warm_median, _, _ = sweep_stats(frame, "yes")
-                xs.append(rtt)
-                medians.append(median)
-                lows.append(low)
-                highs.append(high)
-                warms.append(warm_median)
-            ax.fill_between(xs, lows, highs, color=CONFIG_COLORS[config],
-                            alpha=0.15, linewidth=0)
-            ax.plot(xs, medians, color=CONFIG_COLORS[config], marker="o",
+        for label, color, style, marker, xs, medians, lows, highs in distance_series(image):
+            ax.fill_between(xs, lows, highs, color=color, alpha=0.15, linewidth=0)
+            ax.plot(xs, medians, color=color, linestyle=style, marker=marker,
                     markersize=3.5, linewidth=1.6,
-                    label=CONFIG_LABELS[config] if image == panels[0][0] else None)
-            # dashed warm floor of the same configuration, explained in the caption
-            ax.plot(xs, warms, color=CONFIG_COLORS[config], linestyle="--",
-                    linewidth=1.0)
+                    label=label if image == panels[0][0] else None)
+        ax.set_yscale("log")
+        ax.set_yticks([2, 3, 5, 10, 20, 50])
+        ax.get_yaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
         ax.set_title(title, fontsize=9)
         ax.set_xlabel("Emulated registry RTT (ms)")
-        ax.set_xticks(rtts)
-        ax.set_ylabel("Scale-out cold start (s)")
+        ax.set_xticks(DISTANCE_RTTS)
+    axes[0].set_ylabel("Scale-out cold start (s)")
 
-    axes[1].set_ylabel(None)
-    fig.legend(loc="upper center", ncol=2, fontsize=8, bbox_to_anchor=(0.5, 1.04))
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.legend(loc="upper center", ncol=3, fontsize=7.5, bbox_to_anchor=(0.5, 1.08))
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
     fig.savefig(os.path.join(OUT, "eval_distance_sweep.pdf"), bbox_inches="tight")
     plt.close(fig)
 

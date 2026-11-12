@@ -1,0 +1,6 @@
+repetition,seed_node,received_bytes,blob_bytes,fraction,observed
+1,aks-node-00000q,56872902,52936692,1.074,yes
+2,aks-node-00000q,55926296,52936692,1.056,yes
+3,aks-node-00000q,56776404,52936692,1.073,yes
+4,aks-node-00000q,56957035,52936692,1.076,yes
+5,aks-node-00000q,55721239,52936692,1.053,yes

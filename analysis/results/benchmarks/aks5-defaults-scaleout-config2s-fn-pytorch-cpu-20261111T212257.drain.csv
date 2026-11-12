@@ -1,0 +1,16 @@
+repetition,node,received_bytes,waited_seconds,outcome,seed_phase_bytes
+1,aks-node-00000l,27092,3.4,quiet,
+1,aks-node-00000m,176396,3.4,quiet,287748464
+1,aks-node-00000n,281341,3.4,quiet,
+2,aks-node-00000l,27027,3.3,quiet,
+2,aks-node-00000m,482861,3.3,quiet,287834998
+2,aks-node-00000n,570903,3.3,quiet,
+3,aks-node-00000l,27284,3.3,quiet,
+3,aks-node-00000m,1146267,3.3,quiet,287582854
+3,aks-node-00000n,304685,3.3,quiet,
+4,aks-node-00000l,21469,3.6,quiet,
+4,aks-node-00000m,645718,3.6,quiet,286548247
+4,aks-node-00000n,339572,3.6,quiet,
+5,aks-node-00000l,23032,3.3,quiet,
+5,aks-node-00000m,433352,3.3,quiet,284360095
+5,aks-node-00000n,485185,3.3,quiet,

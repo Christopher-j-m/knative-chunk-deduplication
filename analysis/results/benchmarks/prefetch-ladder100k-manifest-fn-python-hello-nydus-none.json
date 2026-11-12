@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.oci.image.config.v1+json",
+    "digest": "sha256:b539e580bbca0c1c856c387aa407f2156751aad0e4203cf713988bc92527607b",
+    "size": 5635
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+      "digest": "sha256:286cb4f586aa3200cb807343efe8e0533dc047748e51b29101eb5fdd94b74833",
+      "size": 7816,
+      "annotations": {
+        "containerd.io/snapshot/nydus-blob": "true"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+      "digest": "sha256:ed43cea76c90ba1c266561e24fd4f203dc572ff4ff71090f4602cf9f5d4c20d7",
+      "size": 37089937,
+      "annotations": {
+        "containerd.io/snapshot/nydus-blob": "true"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+      "digest": "sha256:79463eff2ef610ff55f63a708e9070ed88bec4d7875a30a7ad035459fae0c3a5",
+      "size": 78557719,
+      "annotations": {
+        "containerd.io/snapshot/nydus-blob": "true"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+      "digest": "sha256:3267dd3f490621486a4e0191aff01faddde03857a0eea5735c9264e3b913db4a",
+      "size": 3028266,
+      "annotations": {
+        "containerd.io/snapshot/nydus-blob": "true"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+      "digest": "sha256:6b356a22eb8c305c4fa80b0756f170b5553a87697fb2b7ed2e0d60627e1eb4a5",
+      "size": 14414666,
+      "annotations": {
+        "containerd.io/snapshot/nydus-blob": "true"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:e0846aeae1c10089340461c4072cbc6a6f74e9b6f59669e5d620a1e4001b61ca",
+      "size": 431836,
+      "annotations": {
+        "containerd.io/snapshot/nydus-bootstrap": "true",
+        "containerd.io/snapshot/nydus-fs-version": "6"
+      }
+    }
+  ],
+  "annotations": {
+    "containerd.io/snapshot/nydus-builder-version": "v2.3.2",
+    "containerd.io/snapshot/nydus-fs-version": "6",
+    "containerd.io/snapshot/nydus-source-digest": "sha256:4e9a10375dbb7e6c81b8a7341520229c0832fa8179caec849e94fec2b5df9d6f",
+    "containerd.io/snapshot/nydus-source-reference": "localhost:5000/fn-python-hello:latest"
+  }
+}

@@ -1,0 +1,11 @@
+== /var/lib/containerd-nydus/socket/dbq9thv6ft3gi1fc4b50/api.sock
+{"backend_type":"registry","read_count":275,"read_errors":0,"read_amount_total":223421137,"read_cumulative_latency_millis_total":8760,"read_cumulative_latency_millis_dist":[29,0,389,579,203,678,2429,4453],"read_count_block_size_dist":[2,0,6,14,14,27,75,137],"read_latency_sizes_dist":[[0,2,0,0,0,0,0,0],[0,0,0,0,0,0,0,0],[0,3,1,0,2,0,0,0],[0,11,0,1,2,0,0,0],[0,13,1,0,0,0,0,0],[0,22,3,1,1,0,0,0],[0,21,43,11,0,0,0,0],[0,38,81,16,2,0,0,0]]}
+== established connections of nydusd
+0      0               <node-ip-3>:44700        <registry-ip>:443   users:(("nydusd",pid=241088,fd=18))      
+0      0               <node-ip-3>:58768      <storage-ip-2>:443   users:(("nydusd",pid=241088,fd=55))      
+0      0               <node-ip-3>:44730        <registry-ip>:443   users:(("nydusd",pid=241088,fd=48))      
+0      0               <node-ip-3>:44718        <registry-ip>:443   users:(("nydusd",pid=241088,fd=50))      
+0      0               <node-ip-3>:60074      <storage-ip-1>:443   users:(("nydusd",pid=241088,fd=46))      
+0      0               <node-ip-3>:44706        <registry-ip>:443   users:(("nydusd",pid=241088,fd=49))      
+0      0               <node-ip-3>:60088      <storage-ip-1>:443   users:(("nydusd",pid=241088,fd=54))      
+0      0               <node-ip-3>:60086      <storage-ip-1>:443   users:(("nydusd",pid=241088,fd=53))      

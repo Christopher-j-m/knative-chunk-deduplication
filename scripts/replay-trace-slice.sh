@@ -3,16 +3,18 @@
 # under one configuration and records what the cluster did: every request's
 # latency, every pod creation, the cache's hit and miss counters, and the
 # registry's request log. Comparing it with the simulator's
-# predictions for the same slice is the live check of the pod-lifecycle model.
+# predictions for the same slice is the live check of the pod-lifecycle model
+# Configuration 2s runs stock nydusd, which reads the registry itself; the
+# cache stays deployed but idle there, so its counters read zero
 #
-# Usage: replay-trace-slice.sh <2|4>
+# Usage: replay-trace-slice.sh <2|2s|4>
 # Optional env: RTT (default 80ms), RATE (default 600mbit), TRACE, APPS
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-CONFIG="${1:?usage: replay-trace-slice.sh <2|4>}"
-case "${CONFIG}" in 2|4) ;; *) echo "config must be 2 or 4" >&2; exit 1 ;; esac
+CONFIG="${1:?usage: replay-trace-slice.sh <2|2s|4>}"
+case "${CONFIG}" in 2|2s|4) ;; *) echo "config must be 2, 2s or 4" >&2; exit 1 ;; esac
 RTT="${RTT:-80ms}"
 RATE="${RATE:-600mbit}"
 TRACE="${TRACE:-analysis/traces/slice-1h.csv}"

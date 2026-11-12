@@ -1,0 +1,10 @@
+repetition,node,received_bytes,waited_seconds,outcome,seed_phase_bytes
+1,aks-node-00000l,27782,3.4,quiet,
+1,aks-node-00000m,1143258,3.4,quiet,58738827
+1,aks-node-00000n,426255,3.4,quiet,
+2,aks-node-00000l,23424,3.3,quiet,
+2,aks-node-00000m,621830,3.3,quiet,59695814
+2,aks-node-00000n,252471,3.3,quiet,
+3,aks-node-00000l,25557,3.3,quiet,
+3,aks-node-00000m,538272,3.3,quiet,58625554
+3,aks-node-00000n,242526,3.3,quiet,

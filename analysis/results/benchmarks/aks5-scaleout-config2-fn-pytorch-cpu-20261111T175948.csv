@@ -1,0 +1,21 @@
+config,rep,phase,node,warm,ready_seconds,pull_seconds,cache_hits_delta,cache_misses_delta,node_rx_bytes,phase_started_at,netem_dropped,registry_fetch_errors,registry_fetch_error_reasons,restart_count,last_exit_code,last_exit_reason
+2,1,seed,aks-node-00000l,no,65.855,0.556,0,0,318360147,2026-11-11T18:02:31.426Z,,964,connection refused=964,3,1,Error
+2,1,scaleout,aks-node-00000l,yes,4.194,0,0,0,1317189,2026-11-11T18:03:46.038Z,,0,,0,,
+2,1,scaleout,aks-node-00000n,no,25.951,0.605,0,0,320335875,2026-11-11T18:03:46.038Z,,0,,0,,
+2,1,scaleout,aks-node-00000m,no,225.456,0.538,0,0,342452420,2026-11-11T18:03:46.038Z,,1043,connection refused=576|http 429=467,5,1,Error
+2,2,seed,aks-node-00000m,no,64.036,0.519,0,0,315874114,2026-11-11T18:08:37.987Z,,670,connection refused=670,3,1,Error
+2,2,scaleout,aks-node-00000m,yes,4.137,0,0,0,30573267,2026-11-11T18:09:50.760Z,,0,,0,,
+2,2,scaleout,aks-node-00000n,no,130.030,0.461,0,0,330573068,2026-11-11T18:09:50.760Z,,393,connection refused=84|http 429=309,4,1,Error
+2,2,scaleout,aks-node-00000l,no,221.443,0.483,0,0,314361162,2026-11-11T18:09:50.760Z,,776,connection refused=374|http 429=402,5,1,Error
+2,3,seed,aks-node-00000m,no,69.484,0.578,0,0,325938491,2026-11-11T18:14:38.515Z,,926,connection refused=926,3,1,Error
+2,3,scaleout,aks-node-00000m,yes,4.501,0,0,0,31845909,2026-11-11T18:15:57.495Z,,0,,0,,
+2,3,scaleout,aks-node-00000n,no,129.834,0.501,0,0,336655541,2026-11-11T18:15:57.495Z,,1006,connection refused=430|http 429=576,4,1,Error
+2,3,scaleout,aks-node-00000l,no,235.628,0.489,0,0,332253116,2026-11-11T18:15:57.495Z,,1701,connection refused=949|http 429=752,5,1,Error
+2,4,seed,aks-node-00000l,no,68.857,0.662,0,0,310159432,2026-11-11T18:20:58.663Z,,840,connection refused=840,3,1,Error
+2,4,scaleout,aks-node-00000l,yes,4.096,0,0,0,4591776,2026-11-11T18:22:16.463Z,,0,,0,,
+2,4,scaleout,aks-node-00000n,no,160.600,0.475,0,0,365274076,2026-11-11T18:22:16.463Z,,2455,connection refused=1464|http 429=991,4,1,Error
+2,4,scaleout,aks-node-00000m,no,230.215,0.500,0,0,350330021,2026-11-11T18:22:16.463Z,,955,connection refused=423|http 429=532,5,1,Error
+2,5,seed,aks-node-00000m,no,62.581,0.607,0,0,331246865,2026-11-11T18:27:11.730Z,,1220,connection refused=1220,3,1,Error
+2,5,scaleout,aks-node-00000m,yes,6.197,0,0,0,21678160,2026-11-11T18:28:23.120Z,,0,,0,,
+2,5,scaleout,aks-node-00000l,no,129.534,0.546,0,0,317282753,2026-11-11T18:28:23.120Z,,680,connection refused=618|http 429=62,4,1,Error
+2,5,scaleout,aks-node-00000n,no,137.155,0.490,0,0,338955838,2026-11-11T18:28:23.120Z,,1123,connection refused=842|http 429=281,4,1,Error

@@ -1,0 +1,66 @@
+{
+ "schemaVersion": 2,
+ "mediaType": "application/vnd.oci.image.manifest.v1+json",
+ "config": {
+  "mediaType": "application/vnd.oci.image.config.v1+json",
+  "digest": "sha256:2342ce9ac9188694860f19810f6964e1e57a6160b397ab4d60003e7ef24bdabc",
+  "size": 5650
+ },
+ "layers": [
+  {
+   "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+   "digest": "sha256:d13bac290ca815bcd49ae28c21c7ef6a0834fccd110335dc8295fdcdf079954e",
+   "size": 7788,
+   "annotations": {
+    "containerd.io/snapshot/nydus-blob": "true"
+   }
+  },
+  {
+   "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+   "digest": "sha256:21227e824e0a7dc3a30bde7bbf7b225b52d5a0dd5029ceb7c5c2241c8c321140",
+   "size": 13237881,
+   "annotations": {
+    "containerd.io/snapshot/nydus-blob": "true"
+   }
+  },
+  {
+   "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+   "digest": "sha256:7e803529bcf58c4aa539c428df28340093bcc2b6cbba5dadec404a81a8c4df0f",
+   "size": 32593864,
+   "annotations": {
+    "containerd.io/snapshot/nydus-blob": "true"
+   }
+  },
+  {
+   "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+   "digest": "sha256:e2998f5713cc16539556c10d760ea59d5b62b10e0f27a770d9cf29d4fbb7bbd7",
+   "size": 1145451,
+   "annotations": {
+    "containerd.io/snapshot/nydus-blob": "true"
+   }
+  },
+  {
+   "mediaType": "application/vnd.oci.image.layer.nydus.blob.v1",
+   "digest": "sha256:c7b68a2b5a887070939706e1a1f81a532fa08a7f57732e4b2c501e027f8c883a",
+   "size": 5951708,
+   "annotations": {
+    "containerd.io/snapshot/nydus-blob": "true"
+   }
+  },
+  {
+   "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+   "digest": "sha256:5fd9caef3d5506a3a63e877e70ee2caf4e00d967616b9a22e19891a95c9d1bec",
+   "size": 442046,
+   "annotations": {
+    "containerd.io/snapshot/nydus-bootstrap": "true",
+    "containerd.io/snapshot/nydus-fs-version": "6"
+   }
+  }
+ ],
+ "annotations": {
+  "containerd.io/snapshot/nydus-builder-version": "v2.3.2",
+  "containerd.io/snapshot/nydus-fs-version": "6",
+  "containerd.io/snapshot/nydus-source-digest": "sha256:4bd0a426a80ab97db902a41a22ed348ae53ef821706369b84d2e4e62bcb778e1",
+  "containerd.io/snapshot/nydus-source-reference": "<registry>.azurecr.io/fn-python-hello:oci"
+ }
+}

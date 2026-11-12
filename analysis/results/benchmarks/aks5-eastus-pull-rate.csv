@@ -1,0 +1,3 @@
+measured_at,registry,image,compressed_bytes,fetch_seconds,bytes_per_second
+2026-11-11T18:32:27Z,<registry-eastus>.azurecr.io,fn-pytorch-cpu,267478092,15.114,17697373
+2026-11-11T18:32:36Z,<registry>.azurecr.io,fn-pytorch-cpu,267478092,3.717,71960746
