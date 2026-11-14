@@ -1,3 +1,4 @@
+"""Flask function that answers every request with a greeting"""
 from flask import Flask
 app = Flask(__name__)
 

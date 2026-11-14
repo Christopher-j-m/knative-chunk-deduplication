@@ -1,3 +1,4 @@
+"""Flask function that loads NumPy and answers with the shape of a small array"""
 from flask import Flask
 import numpy as np
 

@@ -58,8 +58,6 @@ func main() {
 	if err := loader.Refresh(context.Background()); err != nil {
 		log.Printf("error during initial bootstrap scan: %v", err)
 	}
-
-	// Counters are served next to the blob routes, so a benchmark can read them from the node
 	metricsRegistry := prometheus.NewRegistry()
 
 	// Create handler for handling the nydusd requests
@@ -84,8 +82,6 @@ func main() {
 	runUntilSignal(cfg, withMetricsRoute(handler, metricsRegistry), loader)
 }
 
-// Adds a /metrics route in front of the proxy. Blob names are hex digests, so
-// they never collide with it.
 func withMetricsRoute(proxyHandler http.Handler, metricsRegistry *prometheus.Registry) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{}))
@@ -131,7 +127,7 @@ func parseFlags() config {
 	flag.IntVar(&cfg.breakerThreshold, "breaker-threshold", 5, "Consecutive cache failures before temporarily skip the cluster cache path")
 	flag.DurationVar(&cfg.breakerCooldown, "breaker-cooldown", 2*time.Second, "Timeout until retrying if cache is available again")
 	flag.BoolVar(&cfg.cacheEnabled, "cache-enabled", true, "Serve chunks via the cluster cache => set false to bypass straight to the registry")
-	flag.BoolVar(&cfg.parallelMiss, "parallel-miss-fetch", false, "Ask the registry at the same time as the cache; a hit cancels the registry request")
+	flag.BoolVar(&cfg.parallelMiss, "parallel-miss-fetch", false, "Ask the registry alongside the cache instead of after a miss, a hit cancels the registry request")
 	flag.Parse() // User input
 
 	// Check for required params

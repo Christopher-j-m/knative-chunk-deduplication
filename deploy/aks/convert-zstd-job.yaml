@@ -1,5 +1,5 @@
 # Converts the six corpus images into the compressed Nydus conversion that a
-# stock deployment uses, inside the cluster instead of on the operator's host.
+# plain deployment uses, inside the cluster instead of on the operator's host.
 # nydusify v2.3.2 runs with its default compressor (zstd) from each image's
 # eager tag and writes the tag nydus-zstd beside the existing ones. The push
 # credentials come from the secret acr-push, a docker config.json for __ACR__.

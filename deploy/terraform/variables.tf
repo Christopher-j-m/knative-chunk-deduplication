@@ -15,7 +15,8 @@ variable "cluster_name" {
 }
 
 variable "acr_name" {
-  type    = string
+  description = "Globally unique name of the container registry"
+  type        = string
 }
 
 variable "node_count" {

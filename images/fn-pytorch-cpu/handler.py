@@ -1,3 +1,4 @@
+"""Flask function that loads PyTorch and answers with the output of a tiny linear model"""
 import torch
 from flask import Flask, jsonify
 

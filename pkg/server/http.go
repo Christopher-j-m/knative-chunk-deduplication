@@ -89,20 +89,18 @@ func servePut(writer http.ResponseWriter, request *http.Request, clusterCache *c
 		return
 	}
 
-	// The chunk has to be read in full before its hash can be compared with the name it is stored under
 	chunkBytes, err := io.ReadAll(request.Body)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if !nydus.MatchesChunkDigest(chunkBytes, hash) {
-		http.Error(writer, "chunk bytes do not match the chunk digest", http.StatusBadRequest)
+		http.Error(writer, "chunk bytes are not matching the digest of the chunk", http.StatusBadRequest)
 		return
 	}
 	storeChunk(writer, clusterCache, hash, bytes.NewReader(chunkBytes))
 }
 
-// Writes a chunk into the cache and answers the uploader
 func storeChunk(writer http.ResponseWriter, clusterCache *cache.Cache, hash string, chunk io.Reader) {
 	if err := clusterCache.Put(hash, chunk); err != nil {
 		http.Error(writer, err.Error(), http.StatusInternalServerError)

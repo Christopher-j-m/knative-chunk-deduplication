@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"nydus-cluster-cache/pkg/analysis"
 	"nydus-cluster-cache/pkg/nydus"
+	"nydus-cluster-cache/pkg/overlap"
 )
 
 // Nydus images contain one layer that is required to be downloaded before the container can even start
@@ -138,11 +138,11 @@ func buildRefs(arg, registry, ociTag, nydusTag string) (nydusRef, ociRef string,
 // Converts the layer list from an OCI manifest into our own format for layer sizes and comparison later on
 // => the manifests reported size is the compressed on-disk size
 // The uncompressed size is not available here, so both size and compressedSize are set to the same value for now
-func manifestToLayerInfos(manifest ociManifest, image, source string) []analysis.LayerInfo {
-	layerData := make([]analysis.LayerInfo, 0, len(manifest.Layers))
+func manifestToLayerInfos(manifest ociManifest, image, source string) []overlap.LayerInfo {
+	layerData := make([]overlap.LayerInfo, 0, len(manifest.Layers))
 	for _, currLayer := range manifest.Layers {
 		size := uint64(currLayer.Size)
-		layerData = append(layerData, analysis.LayerInfo{
+		layerData = append(layerData, overlap.LayerInfo{
 			Digest:         currLayer.Digest,
 			Size:           size,
 			CompressedSize: size,
@@ -409,8 +409,8 @@ func layersOutputPath(chunksOutput string) string {
 
 // Structure of the layer-size file that will be used to compare storage sizes between nydus and oci images
 type layersDoc struct {
-	OCILayers   []analysis.ImageLayers `json:"oci_layers"`
-	NydusLayers []analysis.ImageLayers `json:"nydus_layers"`
+	OCILayers   []overlap.ImageLayers `json:"oci_layers"`
+	NydusLayers []overlap.ImageLayers `json:"nydus_layers"`
 }
 
 func main() {
@@ -441,7 +441,7 @@ func main() {
 	// HTTP client for the registry requests
 	client := &http.Client{Timeout: *timeout}
 	var results []nydus.ImageChunks
-	var ociLayers, nydusLayers []analysis.ImageLayers
+	var ociLayers, nydusLayers []overlap.ImageLayers
 
 	// Pull & extract each image from the input image list
 	for _, arg := range args {
@@ -485,7 +485,7 @@ func main() {
 		// Collect layer-size for both image formats
 		if *extractLayers {
 			// Nydus layers come from the manifest we already fetched above
-			nydusLayers = append(nydusLayers, analysis.ImageLayers{
+			nydusLayers = append(nydusLayers, overlap.ImageLayers{
 				Image:  arg,
 				Source: "nydus",
 				Layers: manifestToLayerInfos(nydusManifest, arg, "nydus"),
@@ -506,7 +506,7 @@ func main() {
 				log.Fatalf("error fetching oci manifest for %s: %v", ociRef, ferr)
 			}
 
-			ociLayers = append(ociLayers, analysis.ImageLayers{
+			ociLayers = append(ociLayers, overlap.ImageLayers{
 				Image:  arg,
 				Source: "oci",
 				Layers: manifestToLayerInfos(ociManifestData, arg, "oci"),

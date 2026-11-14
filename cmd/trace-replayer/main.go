@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"nydus-cluster-cache/pkg/sim"
+	"nydus-cluster-cache/pkg/simulation"
 )
 
 func main() {
@@ -31,7 +31,7 @@ func main() {
 		log.Fatal("need -trace and -urls")
 	}
 
-	trace, err := sim.LoadTrace(*tracePath)
+	trace, err := simulation.LoadTrace(*tracePath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -112,7 +112,7 @@ type requestRecord struct {
 }
 
 // main function to sent the requests and record the results to csv
-func replay(trace *sim.Trace, targets map[string]target, client *http.Client, out io.Writer) (int, error) {
+func replay(trace *simulation.Trace, targets map[string]target, client *http.Client, out io.Writer) (int, error) {
 	resultFileWriter := csv.NewWriter(out)
 	defer resultFileWriter.Flush()
 	if err := resultFileWriter.Write([]string{"at_ms", "app", "status", "latency_ms", "sent_at_unix_ms"}); err != nil {
@@ -130,7 +130,7 @@ func replay(trace *sim.Trace, targets map[string]target, client *http.Client, ou
 		// Sleep until the function call is due
 		time.Sleep(time.Until(dueAt(start, currInvocation)))
 		waitGrp.Add(1)
-		go func(inv sim.Invocation) {
+		go func(inv simulation.Invocation) {
 			defer waitGrp.Done()
 			// look up the function name & send request
 			app := trace.Apps[inv.App]
@@ -189,6 +189,6 @@ func (record requestRecord) fields() []string {
 	}
 }
 
-func dueAt(start time.Time, inv sim.Invocation) time.Time {
+func dueAt(start time.Time, inv simulation.Invocation) time.Time {
 	return start.Add(time.Duration(inv.AtMs) * time.Millisecond)
 }

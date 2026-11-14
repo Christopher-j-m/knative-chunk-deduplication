@@ -62,18 +62,6 @@ func (lru *LRU) RecordAccess(hash string) {
 	}
 }
 
-// Drops a chunk from the lru tracking AND from the cluster cache store
-func (lru *LRU) Forget(hash string) {
-	lru.mutex.Lock()
-	defer lru.mutex.Unlock()
-
-	if lruChunkElem, ok := lru.entries[hash]; ok {
-		lru.order.Remove(lruChunkElem)
-		delete(lru.entries, hash)
-		_ = lru.chunkStore.Delete(hash)
-	}
-}
-
 // Drops the least recently used chunks in the cluster cache if the cache capacity is exceeded, else does nothing
 // => Least-recently = bottom of the lru order list
 // requires the caller to hold the lru mutex

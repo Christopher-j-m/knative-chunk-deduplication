@@ -2,7 +2,7 @@
 set -eu
 
 # Converges one AKS node: nydus binaries + configs + systemd unit + containerd
-# proxy_plugins registration. Idempotent — safe on every DaemonSet (re)start,
+# proxy_plugins registration. Idempotent, so safe on every DaemonSet (re)start,
 # which also heals a reimaged node. Runs in the HOST mount namespace; the
 # DaemonSet stages the payload at /opt/nydus-installer first.
 PAYLOAD=/opt/nydus-installer

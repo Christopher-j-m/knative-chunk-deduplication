@@ -57,8 +57,7 @@ type Options struct {
 	// Counters this proxy reports, an unregistered set is used when left empty
 	Metrics *Metrics
 
-	// Ask the registry at the same time as the cache instead of after a miss,
-	// a hit cancels the registry request. Saves the lookup on a miss at the price of extra registry requests
+	// Ask the registry at the same time as the cache instead of after a miss
 	ParallelMissFetch bool
 }
 
@@ -313,9 +312,7 @@ func (handler *Handler) fetchChunk(ctx context.Context, repo, blob string, chunk
 	return result.([]byte), nil
 }
 
-// Starts the registry fetch and the cache lookup at the same time. A verified
-// hit cancels the registry request, otherwise the registry bytes are served
-// and written to the cache.
+// Fetches a chunk from the cache and the registry at the same time, returning the first result that comes back
 func (handler *Handler) fetchCacheAndRegistryTogether(ctx context.Context, repo, blob string, chunk blobindex.Chunk) ([]byte, error) {
 	registryCtx, cancelRegistry := context.WithCancel(ctx)
 	defer cancelRegistry()
@@ -363,9 +360,7 @@ func (handler *Handler) fetchFromRegistry(ctx context.Context, repo, blob string
 }
 
 // Attempt to read a chunk from the cluster cache
-// Returns the chunk bytes and true on a hit, or (nil, false) on a miss or when the bytes fail their digest check
 func (handler *Handler) tryCache(ctx context.Context, digest string) ([]byte, bool) {
-	// Time every lookup, so the cost a miss adds in front of the registry fetch can be read off the node
 	startedAt := time.Now()
 	data, outcome := handler.lookupCache(ctx, digest)
 	handler.opts.Metrics.LookupSeconds.WithLabelValues(outcome).Observe(time.Since(startedAt).Seconds())
@@ -373,7 +368,7 @@ func (handler *Handler) tryCache(ctx context.Context, digest string) ([]byte, bo
 	return data, outcome == "hit"
 }
 
-// Asks the cluster cache for one chunk and names the outcome: hit, miss, mismatch or error
+// Asks the cluster cache for one chunk
 func (handler *Handler) lookupCache(ctx context.Context, digest string) ([]byte, string) {
 	// Own timeout so cache cant stall the read unnecessarily long
 	reqCtx, cancel := context.WithTimeout(ctx, handler.opts.CacheTimeout)
@@ -398,10 +393,8 @@ func (handler *Handler) lookupCache(ctx context.Context, digest string) ([]byte,
 		return nil, "error"
 	}
 
-	// The cache answered, so it counts as healthy even when the bytes turn out to be wrong
 	handler.breaker.recordSuccess()
 
-	// Any pod can write to the cache, so bytes that do not match their name are treated as a miss
 	if !nydus.MatchesChunkDigest(data, digest) {
 		handler.opts.Metrics.DigestMismatches.Inc()
 		return nil, "mismatch"

@@ -77,10 +77,9 @@ type config struct {
 	storeKind     string
 	storeRoot     string
 	capacityBytes uint64
-	checkDigests  bool // Refuse uploads whose bytes do not hash to the chunk name
+	checkDigests  bool
 }
 
-// Turns the parsed flags into options for the chunk API handler
 func handlerOptions(cfg config) []server.Option {
 	if !cfg.checkDigests {
 		return nil
@@ -96,7 +95,7 @@ func parseFlags() config {
 	flag.StringVar(&cfg.storeKind, "store", "memory", "Store backend: memory or disk")
 	flag.StringVar(&cfg.storeRoot, "store-root", "/var/lib/nydus-cluster-cache", "Disk store root directory")
 	flag.Uint64Var(&cfg.capacityBytes, "capacity-bytes", 0, "Eviction capacity in bytes; zero disables eviction")
-	flag.BoolVar(&cfg.checkDigests, "check-digests", false, "Refuse chunk uploads whose bytes do not hash to their name; leave off for synthetic load tests")
+	flag.BoolVar(&cfg.checkDigests, "check-digests", false, "Refuse uploads whose bytes do not hash to the chunk name")
 	flag.Parse() // Replace above default values with the specific binary input params
 	return cfg
 }

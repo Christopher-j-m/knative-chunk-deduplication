@@ -70,7 +70,7 @@ spec:
   type: ClusterIP
   # Pinned so the host-network chunk-proxy can dial the cache without cluster
   # DNS. .50 sits outside the low allocated range; confirm free on first
-  # bring-up (kubectl get svc -A) and adjust here + chunk-proxy.yaml if not.
+  # bring-up (kubectl get svc -A) and adjust here + chunk-proxy.yaml if not
   clusterIP: 10.0.0.50
   selector:
     app: nydus-cluster-cache

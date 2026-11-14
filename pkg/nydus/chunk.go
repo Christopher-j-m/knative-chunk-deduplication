@@ -23,7 +23,7 @@ type ImageChunks struct {
 	Image          string      `json:"image"`                     // container image name
 	TotalBytes     uint64      `json:"total_bytes"`               // size of all uncompressed chunks in the image
 	Chunks         []ChunkInfo `json:"chunks"`                    // chunks of this image
-	AccessedChunks []ChunkInfo `json:"accessed_chunks,omitempty"` // chunks that are accessed during cold start => only filled via scripts/run-startup-trace.sh
+	AccessedChunks []ChunkInfo `json:"accessed_chunks,omitempty"` // chunks that are accessed during cold start => only filled via scripts/overlap/run-startup-trace.sh
 }
 
 // Return a deduplicated list of chunks

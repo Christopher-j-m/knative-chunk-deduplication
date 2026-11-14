@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"nydus-cluster-cache/pkg/analysis"
 	"nydus-cluster-cache/pkg/nydus"
+	"nydus-cluster-cache/pkg/overlap"
 )
 
 // Contains the list of image with their respective roles (overlap analysis only or knative-workload for later experiments)
@@ -31,20 +31,20 @@ type CorpusConfig struct {
 
 // Used for comparing deduplication for OCI layers and nydus blobs
 type BlobOverlapOutput struct {
-	OCIMetrics       analysis.LayerOverlapMetrics    `json:"oci_metrics"`
-	NydusMetrics     analysis.LayerOverlapMetrics    `json:"nydus_metrics"`
-	OCIPairwise      []analysis.PairwiseLayerOverlap `json:"oci_pairwise,omitempty"`
-	NydusPairwise    []analysis.PairwiseLayerOverlap `json:"nydus_pairwise,omitempty"`
-	ChunkMinusBlobMB int64                           `json:"chunk_minus_blob_mb"` // How much add. space nydus content-defined chunking can save
+	OCIMetrics       overlap.LayerOverlapMetrics    `json:"oci_metrics"`
+	NydusMetrics     overlap.LayerOverlapMetrics    `json:"nydus_metrics"`
+	OCIPairwise      []overlap.PairwiseLayerOverlap `json:"oci_pairwise,omitempty"`
+	NydusPairwise    []overlap.PairwiseLayerOverlap `json:"nydus_pairwise,omitempty"`
+	ChunkMinusBlobMB int64                          `json:"chunk_minus_blob_mb"` // How much add. space nydus content-defined chunking can save
 }
 
 // Metrics across all the images, such as per image-pair overlap, chunk frequencies,...
 type AnalysisOutput struct {
-	Corpus      analysis.CorpusMetrics      `json:"corpus_metrics"`
-	Pairwise    []analysis.PairwiseOverlap  `json:"pairwise_overlap"`
-	Scenarios   []analysis.CoverageScenario `json:"coverage_scenarios"`
-	Frequencies []analysis.ChunkFrequency   `json:"chunk_frequencies"`
-	BlobOverlap *BlobOverlapOutput          `json:"blob_overlap,omitempty"`
+	Corpus      overlap.CorpusMetrics      `json:"corpus_metrics"`
+	Pairwise    []overlap.PairwiseOverlap  `json:"pairwise_overlap"`
+	Scenarios   []overlap.CoverageScenario `json:"coverage_scenarios"`
+	Frequencies []overlap.ChunkFrequency   `json:"chunk_frequencies"`
+	BlobOverlap *BlobOverlapOutput         `json:"blob_overlap,omitempty"`
 }
 
 func main() {
@@ -113,17 +113,17 @@ func main() {
 	}
 
 	// Choose between all chunks or only those accessed during startup, depending on the input param
-	chunkSelector := analysis.AllChunks
+	chunkSelector := overlap.AllChunks
 	if *useAccessed {
-		if err := analysis.ValidateAccessData(corpus); err != nil {
+		if err := overlap.ValidateAccessData(corpus); err != nil {
 			log.Fatalf("--accessed-only requires startup trace data: %v", err)
 		}
-		chunkSelector = analysis.AccessedOnly
+		chunkSelector = overlap.AccessedOnly
 	}
 
 	fmt.Printf("Analyzing %d images...\n", len(corpus))
 
-	metrics := analysis.ComputeCorpusMetrics(corpus, chunkSelector)
+	metrics := overlap.ComputeCorpusMetrics(corpus, chunkSelector)
 	fmt.Printf("\nCorpus Metrics:\n")
 	fmt.Printf("Total chunks: %d\n", metrics.TotalChunks)
 	fmt.Printf("Unique chunks: %d\n", metrics.UniqueChunks)
@@ -134,7 +134,7 @@ func main() {
 	fmt.Printf("Redundant: %d MB\n", metrics.RedundantBytes/1024/1024)
 
 	// Sort so that the pairs with the potentially most overlap appear at top of the list
-	pairwise := analysis.ComputePairwiseOverlap(corpus, chunkSelector)
+	pairwise := overlap.ComputePairwiseOverlap(corpus, chunkSelector)
 	sort.Slice(pairwise, func(i, j int) bool {
 		if pairwise[i].SharedBytes != pairwise[j].SharedBytes {
 			return pairwise[i].SharedBytes > pairwise[j].SharedBytes
@@ -154,13 +154,13 @@ func main() {
 	}
 
 	// Run the coverage scenarios
-	var scenarios []analysis.CoverageScenario
+	var scenarios []overlap.CoverageScenario
 	corpusData, err := os.ReadFile(*corpusFile)
 	if err == nil {
 		var config CorpusConfig
 
 		if err := json.Unmarshal(corpusData, &config); err == nil && len(config.CoverageScenarios) > 0 {
-			var inputs []analysis.CoverageOrder
+			var inputs []overlap.CoverageOrder
 
 			for _, currScenario := range config.CoverageScenarios {
 
@@ -192,12 +192,12 @@ func main() {
 
 					rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
 				}
-				inputs = append(inputs, analysis.CoverageOrder{Name: currScenario.Name, Order: order})
+				inputs = append(inputs, overlap.CoverageOrder{Name: currScenario.Name, Order: order})
 			}
 
 			// Run the curr scenario by simulating the cluster cache filling up with the given workload order
 			var scenarioErr error
-			scenarios, scenarioErr = analysis.ComputeCoverageCurveMultiOrder(corpus, inputs, chunkSelector)
+			scenarios, scenarioErr = overlap.ComputeCoverageCurveMultiOrder(corpus, inputs, chunkSelector)
 			if scenarioErr != nil {
 				log.Fatalf("error occured while simulating the scenario: %v", scenarioErr)
 			}
@@ -215,7 +215,7 @@ func main() {
 	}
 
 	// Count how many images reference each chunk
-	frequencies := analysis.ComputeChunkFrequencies(corpus, chunkSelector)
+	frequencies := overlap.ComputeChunkFrequencies(corpus, chunkSelector)
 	fmt.Printf("\nChunk frequency distribution:\n")
 	refCounts := make(map[int]int)
 	for _, currFrequency := range frequencies {
@@ -240,18 +240,18 @@ func main() {
 		}
 
 		var layers struct {
-			OCI   []analysis.ImageLayers `json:"oci_layers"`
-			Nydus []analysis.ImageLayers `json:"nydus_layers"`
+			OCI   []overlap.ImageLayers `json:"oci_layers"`
+			Nydus []overlap.ImageLayers `json:"nydus_layers"`
 		}
 
 		if err := json.Unmarshal(layerData, &layers); err != nil {
 			log.Fatalf("error parsing layer data: %v", err)
 		}
 
-		ociMetrics := analysis.ComputeLayerOverlapMetrics(layers.OCI)
-		nydusMetrics := analysis.ComputeLayerOverlapMetrics(layers.Nydus)
-		ociPairwise := analysis.ComputePairwiseLayerOverlap(layers.OCI)
-		nydusPairwise := analysis.ComputePairwiseLayerOverlap(layers.Nydus)
+		ociMetrics := overlap.ComputeLayerOverlapMetrics(layers.OCI)
+		nydusMetrics := overlap.ComputeLayerOverlapMetrics(layers.Nydus)
+		ociPairwise := overlap.ComputePairwiseLayerOverlap(layers.OCI)
+		nydusPairwise := overlap.ComputePairwiseLayerOverlap(layers.Nydus)
 
 		chunkRedundant := int64(metrics.RedundantBytes)
 		blobRedundant := int64(nydusMetrics.RedundantBytes)
@@ -322,8 +322,8 @@ func main() {
 		}
 
 		// Run overlap analysis with the new chunking
-		fixedMetrics := analysis.ComputeCorpusMetrics(fixedCorpus, chunkSelector)
-		fixedPairwise := analysis.ComputePairwiseOverlap(fixedCorpus, chunkSelector)
+		fixedMetrics := overlap.ComputeCorpusMetrics(fixedCorpus, chunkSelector)
+		fixedPairwise := overlap.ComputePairwiseOverlap(fixedCorpus, chunkSelector)
 
 		// Sort pairs by most bytes first for easier debugging
 		sort.Slice(fixedPairwise, func(i, j int) bool {
@@ -335,7 +335,7 @@ func main() {
 			}
 			return fixedPairwise[i].ImageB < fixedPairwise[j].ImageB
 		})
-		fixedFrequencies := analysis.ComputeChunkFrequencies(fixedCorpus, chunkSelector)
+		fixedFrequencies := overlap.ComputeChunkFrequencies(fixedCorpus, chunkSelector)
 
 		fixedResult := AnalysisOutput{
 			Corpus:      fixedMetrics,

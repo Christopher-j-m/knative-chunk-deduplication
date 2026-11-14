@@ -25,5 +25,5 @@ docker push "${REGISTRY}/nydus-cluster-cache:0.1.0"
 docker push "${REGISTRY}/chunk-proxy:0.1.0"
 
 echo "Installing the nydus binaries onto the nodes"
-"${REPO_ROOT}/scripts/fetch-nydus-binaries.sh"
-"${REPO_ROOT}/scripts/node-snapshotter.sh" install
+"${REPO_ROOT}/scripts/cluster/fetch-nydus-binaries.sh"
+"${REPO_ROOT}/scripts/cluster/node-snapshotter.sh" install

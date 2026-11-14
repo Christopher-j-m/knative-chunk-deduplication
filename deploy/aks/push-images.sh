@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Push the dummy images to acr
+# Pushes the service images and the function images to the Azure registry
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ACR="${ACR:?set ACR to the ACR login server, e.g. <registry>.azurecr.io}"
@@ -9,11 +9,14 @@ LOCAL_REG="localhost:5000"
 
 az acr login --name "${ACR%%.*}"
 
-echo "Building and pushing the cluster cache and chunk procy images"
-docker build -f "${REPO_ROOT}/deploy/Dockerfile" -t "${ACR}/nydus-cluster-cache:0.1.0" "${REPO_ROOT}"
-docker build -f "${REPO_ROOT}/deploy/Dockerfile.chunk-proxy" -t "${ACR}/chunk-proxy:0.1.0" "${REPO_ROOT}"
-docker push "${ACR}/nydus-cluster-cache:0.1.0"
-docker push "${ACR}/chunk-proxy:0.1.0"
+echo "Building and pushing the cluster cache, chunk proxy and node installer images"
+"${REPO_ROOT}/scripts/cluster/fetch-nydus-binaries.sh"
+docker build -f "${REPO_ROOT}/deploy/Dockerfile" -t "${ACR}/nydus-cluster-cache:0.2.0" "${REPO_ROOT}"
+docker build -f "${REPO_ROOT}/deploy/Dockerfile.chunk-proxy" -t "${ACR}/chunk-proxy:0.2.1" "${REPO_ROOT}"
+docker build -f "${REPO_ROOT}/deploy/aks/installer/Dockerfile" -t "${ACR}/nydus-node-installer:0.1.1" "${REPO_ROOT}"
+docker push "${ACR}/nydus-cluster-cache:0.2.0"
+docker push "${ACR}/chunk-proxy:0.2.1"
+docker push "${ACR}/nydus-node-installer:0.1.1"
 
 CORPUS_IMAGES=(
   "fn-go-hello" "fn-python-hello" "fn-java-springboot"
